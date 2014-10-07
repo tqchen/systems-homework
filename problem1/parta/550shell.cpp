@@ -9,6 +9,10 @@
 
 const int kBuffer = 2 << 20;
 
+struct pipe_t {
+  int fd[2];
+};
+
 int main(int argc, char *argv[]) {  
   char *scmd;
   size_t n = 0;
@@ -25,9 +29,29 @@ int main(int argc, char *argv[]) {
       }
     }
     
-    pid_t run_pid = fork();
-    if (run_pid == 0) { 
-      for (size_t i = 0; i < cmds.size(); ++i) {
+    std::vector<pid_t> childs;
+    std::vector<pipe_t> pipes;
+
+    for (size_t i = 0; i+1 < cmds.size(); ++i) {
+      pipe_t p;
+      Check(pipe(p.fd) != -1, "cannot create pipe");
+      pipes.push_back(p);
+    }
+
+    for (size_t i = 0; i < cmds.size(); ++i) {
+      pid_t pid = fork();
+      if (pid == 0) {
+        // child
+        if (i != 0) {
+          close(pipes[i-1].fd[1]);
+          // child
+          dup2(pipes[i-1].fd[0], STDIN_FILENO);
+        }
+        if (i + 1 != cmds.size()) {
+          close(pipes[i].fd[0]);
+          dup2(pipes[i].fd[1], STDOUT_FILENO);        
+        }        
+        // execute command   
         std::vector<char*> args;
         char * ptr = strtok(cmds[i], " \t");
         while (ptr != NULL) {
@@ -36,31 +60,16 @@ int main(int argc, char *argv[]) {
         }
         Check(args.size() > 0, "invalid command format");
         args.push_back(NULL);
-        // run command
-        int pipefd[2];
-        
-        if (i + 1 != cmds.size()) {
-          Check(pipe(pipefd) != -1, "cannot create pipe");
-          pid_t pid = fork();
-          if (pid == 0) {
-            // child
-            close(pipefd[1]);          
-            dup2(pipefd[0], STDIN_FILENO);
-          } else {
-            // parent
-            close(pipefd[0]);
-            dup2(pipefd[1], STDOUT_FILENO);
-            execvp(args[0], &args[0]);
-            break;
-          }
-        } else {
-          execvp(args[0], &args[0]);
-          break;
-        }
+        // run execute
+        Check(execvp(args[0], &args[0]) != -1, "error when executing %s", args[0]);
+      } else {
+        childs.push_back(pid);
       }
-    } else {
+    }
+    
+    for (size_t i = 0; i < childs.size(); ++i) {
       int status;
-      waitpid(run_pid, &status, 0);
+      waitpid(childs[i], &status, 0);
     }
     free(scmd);
   }

@@ -1,10 +1,8 @@
 .PHONY: clean all
 
-all: test 550shell
+all:  550shell
 
 550shell: 550shell.cpp
-	g++ -Wall -O2 -o $@ $+
-test: test.cpp
 	g++ -Wall -O2 -o $@ $+
 
 clean:
