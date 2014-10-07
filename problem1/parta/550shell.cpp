@@ -13,6 +13,30 @@ struct pipe_t {
   int fd[2];
 };
 
+std::vector< std::vector<std::string> > parse(char *scmd) {
+  std::vector< std::vector<std::string> > ret;
+  std::vector<char*> cmds; 
+  {
+    char *ptr = strtok(scmd, "|");
+    while (ptr != NULL) {
+      cmds.push_back(ptr);
+      ptr = strtok(NULL, "|");
+    }
+  }
+  for (size_t i = 0; i < cmds.size(); ++i) {
+    // execute command   
+    std::vector<std::string> args;
+    char * ptr = strtok(cmds[i], " \t");
+    while (ptr != NULL) {
+      args.push_back(std::string(ptr));
+      ptr = strtok(NULL, " \t");        
+    }
+    Check(args.size() > 0, "invalid command format");
+    ret.push_back(args);
+  }
+  return ret;
+}
+
 int main(int argc, char *argv[]) {  
   char *scmd;
   size_t n = 0;
@@ -20,15 +44,8 @@ int main(int argc, char *argv[]) {
     // remove \n
     scmd[strlen(scmd) - 1] = '\0';
     n = 0;
-    std::vector<char*> cmds; 
-    {
-      char *ptr = strtok(scmd, "|");
-      while (ptr != NULL) {
-        cmds.push_back(ptr);
-        ptr = strtok(NULL, "|");
-      }
-    }
-    
+
+    std::vector< std::vector<std::string> > cmds = parse(scmd);
     std::vector<pid_t> childs;
     std::vector<pipe_t> pipes;
 
@@ -51,14 +68,11 @@ int main(int argc, char *argv[]) {
           close(pipes[i].fd[0]);
           dup2(pipes[i].fd[1], STDOUT_FILENO);        
         }        
-        // execute command   
-        std::vector<char*> args;
-        char * ptr = strtok(cmds[i], " \t");
-        while (ptr != NULL) {
-          args.push_back(ptr);
-          ptr = strtok(NULL, " \t");        
+        std::vector<std::string> &argsvec = cmds[i];
+        std::vector<char *> args;
+        for (size_t j = 0; j < argsvec.size(); ++j) {
+          args.push_back(&argsvec[j][0]);          
         }
-        Check(args.size() > 0, "invalid command format");
         args.push_back(NULL);
         // run execute
         Check(execvp(args[0], &args[0]) != -1, "error when executing %s", args[0]);
