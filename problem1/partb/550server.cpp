@@ -4,7 +4,9 @@
 #include <unistd.h>
 #include <sys/poll.h>
 #include <sys/types.h>
+#include <netinet/in.h>
 #include <sys/socket.h>
+#include <netdb.h>
 #include <cstring>
 #include "utils/utils.h"
 #include "utils/thread_pool.h"
@@ -17,10 +19,13 @@ class Server {
     nthread = 4;
     thread_pool = NULL;
   }
-  ~Server(void) {
+  inline void Destroy(void) {    
     delete thread_pool;
   }
   inline void Start(void) {
+    thread_pool = new utils::ThreadPool(nthread);
+    this->StartListen();
+    
     while (true) {
       std::vector<pollfd> fds;
       this->CreatePoll(fds);
@@ -73,6 +78,24 @@ class Server {
     // the end of sending buffer
     size_t sent_bytes;
   };
+  inline void StartListen(void) {
+    int status;
+    addrinfo hints;
+    addrinfo *res;  // will point to the results
+    memset(&hints, 0, sizeof(hints)); // make sure the struct is empty
+    hints.ai_family = AF_UNSPEC;     // don't care IPv4 or IPv6
+    hints.ai_socktype = SOCK_STREAM; // TCP stream sockets
+    hints.ai_flags = AI_PASSIVE;     // fill in my IP for me
+
+    if ((status = getaddrinfo(s_addr.c_str(), s_port.c_str(), &hints, &res)) != 0) {
+      fprintf(stderr, "getaddrinfo error: %s\n", gai_strerror(status));
+      exit(1);
+    }
+    sock_listen = socket(res->ai_family, res->ai_socktype, res->ai_protocol);
+    fcntl(sock_listen, fcntl(sock_listen, F_GETFL) | O_NONBLOCK);
+    bind(sock_listen, res->ai_addr, res->ai_addrlen);
+    listen(sock_listen, 16);
+  }
   inline void HandleGetName(State *s) {
     size_t len = recv(s->sockfd, recvbuffer, 256, 0);
     size_t n = s->file_name.length();
@@ -133,6 +156,7 @@ class Server {
   inline void HandleListen(void) {
     State *s = new State();
     s->sockfd = accept(sock_listen, NULL, NULL);
+    fcntl(s->sockfd, fcntl(s->sockfd, F_GETFL) | O_NONBLOCK);    
     s->type = State::kGetName;
     states.push_back(s);
   }  
@@ -182,6 +206,8 @@ class Server {
   utils::ThreadPool *thread_pool;
   // the states
   std::vector<State*> states;
+  // port and address of server
+  std::string s_port, s_addr;
   // number of threads we are using
   int nthread;
   // the listening socket
