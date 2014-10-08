@@ -55,7 +55,6 @@ inline void ThreadExit(void *status) {
 // thread interface using g++     
 #include <semaphore.h>
 #include <pthread.h>
-namespace xgboost {
 namespace utils {
 /*!\brief semaphore class */
 class Semaphore {
@@ -118,6 +117,26 @@ class Semaphore {
   }
   #endif  
 };
+
+// mutex that works with pthread
+class Mutex {
+ public:
+  inline void Init(void) {
+    pthread_mutex_init(&mutex, NULL);
+  }
+  inline void Lock(void) {
+    pthread_mutex_lock(&mutex);
+  }
+  inline void Unlock(void) {
+    pthread_mutex_unlock(&mutex);
+  }
+  inline void Destroy(void) {
+    pthread_mutex_destroy(&mutex);
+  }
+ private:
+  pthread_mutex_t mutex;
+};
+
 /*!\brief simple thread class */
 class Thread {
  private:
