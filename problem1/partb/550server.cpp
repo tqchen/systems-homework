@@ -142,7 +142,7 @@ class Server {
       // change state here
       s->file_name.resize(ptr - s->file_name.c_str());
       // print ok
-      utils::LogPrintf("GetName Finish: \"%s\"\n", s->file_name.c_str());
+      utils::LogPrintf("Getting Request: \"%s\"\n", s->file_name.c_str());
       utils::Check(pipe(s->pipefd) != -1, "fail to create pipe");
       // set pipe to non blocking
       fcntl(s->pipefd[0], fcntl(s->pipefd[0], F_GETFL) | O_NONBLOCK);
@@ -162,12 +162,14 @@ class Server {
     if (s->type == State::kLoadData) {
       // finish loading
       s->sent_bytes = 0;
-      s->type = State::kSendBack;    
+      s->type = State::kSendBack;
+      utils::LogPrintf("Finish loading: \"%s\", sending back\n", s->file_name.c_str());
     } else {
       utils::Check(s->type == State::kFailLoad, "type must be loading or fail to load");
       close(s->sockfd);
       // fail to load
       s->type = State::kClosed;
+      utils::LogPrintf("Cannot find: \"%s\", close connection\n", s->file_name.c_str());
     }
   }
   inline void HandleSendBack(State *s) {
@@ -179,6 +181,7 @@ class Server {
       close(s->sockfd);
       // fail to load
       s->type = State::kClosed;
+      utils::LogPrintf("Finish sending: \"%s\", close connection\n", s->file_name.c_str());
     }
   }
   inline void CleanClosedStates(void) {
