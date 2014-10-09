@@ -2,10 +2,12 @@
 #include <cstdlib>
 #include <fcntl.h>
 #include <unistd.h>
+#include <signal.h>
 #include <sys/poll.h>
 #include <sys/types.h>
 #include <netinet/in.h>
 #include <sys/socket.h>
+#include <netdb.h>
 #include <netdb.h>
 #include <cstring>
 #include "utils/utils.h"
@@ -18,20 +20,27 @@ class Server {
   Server(void) {
     nthread = 4;
     thread_pool = NULL;
+    s_addr = "127.0.0.1";
+    s_port = "9000";
+    this->shutdown_signal = false;
   }
-  inline void Destroy(void) {    
-    delete thread_pool;
+  ~Server(void) {    
+  }
+  inline void Shutdown(void) {
+    this->shutdown_signal = true;
   }
   inline void Start(void) {
     thread_pool = new utils::ThreadPool(nthread);
     this->StartListen();
-    
-    while (true) {
+
+    while (!shutdown_signal) {
       std::vector<pollfd> fds;
       this->CreatePoll(fds);
       utils::Check(fds.size() != 0, "BUG, fds is always not empty");
-      int ret = poll(&fds[0], fds.size(), 3000);
-      utils::Check(ret != -1, "poll error");
+      int ret = poll(&fds[0], fds.size(), -1);
+      if (ret == -1) {
+        utils::Check(shutdown_signal, "poll error");
+      }
       if (ret == 0) continue;
       
       for (size_t i = 0; i < states.size(); ++i) {
@@ -39,20 +48,34 @@ class Server {
           // handle event happened
           switch (states[i]->type) {
             case State::kGetName: this->HandleGetName(states[i]); break;
+            case State::kFailLoad:
             case State::kLoadData: this->HandleLoadData(states[i]); break;
-            case State::kSendBack: this->HandleSendBack(states[i]); break;
+            case State::kSendBack: this->HandleSendBack(states[i]); break;              
             default: utils::Error("BUG, find unexpected pollfd");
           }
         }
       }
       this->CleanClosedStates();
-      if (fds.back().revents & fds.back().events) {
+      utils::Check(fds.back().fd == sock_listen, "BUG");
+      if (fds.back().revents & POLLIN) {
         this->HandleListen();
       }
+    }  
+    // wait all jobs to finish
+    thread_pool->WaitAllJobs();    
+    // shutdown server
+    close(sock_listen);
+    for (size_t  i = 0; i < states.size(); ++i) {
+      states[i]->Shutdown();
+      delete states[i];
     }
+    delete thread_pool;    
+    utils::LogPrintf("shutdown server..\n");
   }
   inline void SetParam(const char *name, const char *val) {
     if (!strcmp(name, "nthread")) nthread = atoi(val);    
+    if (!strcmp(name, "addr")) s_addr = val;
+    if (!strcmp(name, "port")) s_port = val;
   }
  private:
   // a state in a request
@@ -77,7 +100,18 @@ class Server {
     std::string data_blob;
     // the end of sending buffer
     size_t sent_bytes;
+    // shutdown
+    inline void Shutdown(void) {
+      switch(type) {
+        case kFailLoad: 
+        case kLoadData: close(pipefd[0]); close(pipefd[1]); // no break
+        case kGetName:
+        case kSendBack: close(sockfd); break;
+        case kClosed: break;
+      }
+    }
   };
+
   inline void StartListen(void) {
     int status;
     addrinfo hints;
@@ -93,18 +127,23 @@ class Server {
     }
     sock_listen = socket(res->ai_family, res->ai_socktype, res->ai_protocol);
     fcntl(sock_listen, fcntl(sock_listen, F_GETFL) | O_NONBLOCK);
-    bind(sock_listen, res->ai_addr, res->ai_addrlen);
+    utils::Check(bind(sock_listen, res->ai_addr, res->ai_addrlen) != -1,
+                 "unable to bind to %s:%s\n", s_addr.c_str(), s_port.c_str());
     listen(sock_listen, 16);
+    utils::LogPrintf("start server on %s:%s ...\n", s_addr.c_str(), s_port.c_str());
   }
   inline void HandleGetName(State *s) {
     size_t len = recv(s->sockfd, recvbuffer, 256, 0);
     size_t n = s->file_name.length();
     s->file_name.resize(n + len);
     memcpy(&s->file_name[n], recvbuffer, len);
-    if (s->file_name[n+len-1] == '\n') {
+    const char *ptr = strchr(s->file_name.c_str(), '\n');
+    if (ptr != NULL) {      
       // change state here
-      s->file_name.resize(n+len-1);
-      pipe(s->pipefd);
+      s->file_name.resize(ptr - s->file_name.c_str());
+      // print ok
+      utils::LogPrintf("GetName Finish: \"%s\"\n", s->file_name.c_str());
+      utils::Check(pipe(s->pipefd) != -1, "fail to create pipe");
       // set pipe to non blocking
       fcntl(s->pipefd[0], fcntl(s->pipefd[0], F_GETFL) | O_NONBLOCK);
       // switch to load data
@@ -168,8 +207,8 @@ class Server {
       switch (states[i]->type) {
         case State::kGetName: pfd.fd = states[i]->sockfd; pfd.events = POLLIN; break;
         case State::kLoadData: pfd.fd = states[i]->pipefd[0]; pfd.events = POLLIN; break;
-        case State::kSendBack: pfd.fd = states[i]->sockfd; pfd.events = POLLOUT; break;
-        default: utils::Error("BUG, find unexpected pollfd");
+        case State::kSendBack: pfd.fd = states[i]->sockfd; pfd.events = POLLOUT; break; 
+        default: utils::Error("BUGX, find unexpected pollfd");
       }
       fds.push_back(pfd);
     }
@@ -188,17 +227,17 @@ class Server {
     // fail to load file
     if (fi == NULL) {
       s->type = State::kFailLoad;
-      write(s->pipefd[1], &sig, sizeof(sig));
+      utils::Check(write(s->pipefd[1], &sig, sizeof(sig)) != -1, "fail to write pipe");
       return;
     }
     fseek(fi, 0, SEEK_END);
     s->data_blob.resize(ftell(fi));
     fseek(fi, 0, SEEK_SET);
     if (s->data_blob.length() != 0) {
-      fread(&s->data_blob[0], s->data_blob.length(), 1, fi);
+      utils::Check(fread(&s->data_blob[0], s->data_blob.length(), 1, fi) != 0, "Bug");
     }
     // succesfully load file
-    write(s->pipefd[1], &sig, sizeof(sig));
+    utils::Check(write(s->pipefd[1], &sig, sizeof(sig)) != -1, "fail to write pipe");
   }
   // receive buffer
   char recvbuffer[256];
@@ -212,8 +251,35 @@ class Server {
   int nthread;
   // the listening socket
   int sock_listen;
+  // shutdown signal
+  bool shutdown_signal;
 };
 
+Server server;
+
+void shutdown_handler(int sig) {
+  server.Shutdown();
+}
+void pipe_handler(int sig) {
+}
+
 int main(int argc, char *argv[]) {
+  if (argc < 3) {
+    printf("Usage: [IP] [port]\n"); 
+    printf("proceed with default value\n");
+  } 
+  if (argc > 1) server.SetParam("addr", argv[1]);
+  if (argc > 2) server.SetParam("port", argv[2]);
+  
+  struct sigaction act, pact;
+  act.sa_handler = shutdown_handler;
+  pact.sa_handler = pipe_handler;
+  sigemptyset (&act.sa_mask);
+  sigemptyset (&pact.sa_mask);
+  act.sa_flags = 0; pact.sa_flags = 0;
+  sigaction(SIGTERM, &act, NULL);
+  sigaction(SIGINT, &act, NULL);
+  sigaction(SIGPIPE, &pact, NULL);
+  server.Start();
   return 0;
 }

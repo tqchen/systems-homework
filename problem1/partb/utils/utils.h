@@ -19,7 +19,6 @@ inline void HandleCheckError(const char *msg) {
   fprintf(stderr, "%s\n", msg);
   exit(-1);
 }
-
 /*!\brief same as assert, but this is intended to be used as message for user*/
 inline void Check(bool exp, const char *fmt, ...) {
   if (!exp) {
@@ -42,6 +41,14 @@ inline void Error(const char *fmt, ...) {
     va_end(args);
     HandleCheckError(msg.c_str());
   }
+}
+
+/*! \brief printf, print message to the console */
+inline void LogPrintf(const char *fmt, ...) {
+  va_list args;
+  va_start(args, fmt);
+  vprintf(fmt, args);
+  va_end(args);
 }
 } // namespace utils
 #endif
