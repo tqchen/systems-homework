@@ -1,6 +1,6 @@
 Teammember:
 
-Tianqi Chen, tqchen@cs.washington.edu
+Tianqi Chen, 1323348, tqchen@cs.washington.edu
 Tianyi Zhou, 1323375, tianzh@cs.washington.edu
 
 Part A: Piping Shell
