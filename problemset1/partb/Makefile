@@ -21,3 +21,5 @@ $(BIN) :
 $(OBJ) : 
 	$(CXX) -c $(CFLAGS) -o $@ $(firstword $(filter %.cpp %.c, $^) )
 
+clean:
+	rm -rf $(BIN) $(OBJ) *~
