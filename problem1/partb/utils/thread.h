@@ -16,16 +16,16 @@ class Semaphore {
  public :
   inline void Init(int init_val) {
     sem = CreateSemaphore(NULL, init_val, 10, NULL);
-    utils::Assert(sem != NULL, "create Semaphore error");
+    utils::Check(sem != NULL, "create Semaphore error");
   }
   inline void Destroy(void) {
     CloseHandle(sem);
   }
   inline void Wait(void) {
-    utils::Assert(WaitForSingleObject(sem, INFINITE) == WAIT_OBJECT_0, "WaitForSingleObject error");
+    utils::Check(WaitForSingleObject(sem, INFINITE) == WAIT_OBJECT_0, "WaitForSingleObject error");
   }
   inline void Post(void) {
-    utils::Assert(ReleaseSemaphore(sem, 1, NULL)  != 0, "ReleaseSemaphore error");
+    utils::Check(ReleaseSemaphore(sem, 1, NULL)  != 0, "ReleaseSemaphore error");
   }
  private:
   HANDLE sem;
@@ -81,7 +81,7 @@ class Semaphore {
       perror("sem_open");
       exit(1);
     }
-    utils::Assert(semPtr != NULL, "create Semaphore error");
+    utils::Check(semPtr != NULL, "create Semaphore error");
   }
   inline void Destroy(void) {
     if (sem_close(semPtr) == -1) {
