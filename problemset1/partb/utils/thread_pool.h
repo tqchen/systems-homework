@@ -36,6 +36,7 @@ class ThreadPool {
   }
   // wait for all jobs in the queue to finish
   inline void WaitAllJobs(void) {
+   // note this is not enough, this only indicate all jobs finish launch
     while(queue.size() != 0) {
       queue_empty.Wait();
     }
@@ -60,9 +61,10 @@ class ThreadPool {
       Task tsk = queue.front();
       queue.pop();
       queue_lock.Unlock();
-      if (queue.size() == 0) queue_empty.Post();
       // run the functions
-      tsk.func(tsk.argument);      
+      tsk.func(tsk.argument);  
+      // finish the job
+      if (queue.size() == 0) queue_empty.Post();
     }
   }
   /*!\brief entry point of loader thread */
