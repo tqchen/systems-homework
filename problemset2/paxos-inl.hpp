@@ -22,7 +22,7 @@ class MultiPaxos {
     this->node_id = post->GetRank();
     timeout_counter = 0;
     timeout_limit = 20;
-    majority_size = post->WorldSize() / 2 + 1;    
+    majority_size = post->WorldSize() / 2 + 1;
     leader.node_id = 0; leader.counter = 0;
     current_instance = 0;
     queue_lock.Init();
@@ -75,32 +75,7 @@ class MultiPaxos {
     }
   }
  protected:
-  // notify that the queue is empty
-  virtual void OnQueueEmpty(void) {}
-  virtual void SendTo(int nid, const utils::Message &msg) {
-    post_lock.Lock();
-    post->SendTo(nid, msg);
-    post_lock.Unlock();
-  }
- private:
-  /*! \brief type of message that can be send to the paxos */
-  enum MessageType {
-    kTerminate = 0,
-    // simple acknowledge that leader is alive
-    kLeaderAck = 1,
-    // timeout message
-    kTimeout = 2,
-    // the request message to prepare
-    kPrepareRequest = 3,
-    // the request message to prepare
-    kPrepareReturn = 4,
-    // request for accept
-    kAcceptRequest = 5,
-    // return message from accept
-    kAcceptReturn = 6,
-    // notify that some value is chosen
-    kChosenNotify = 7
-  };
+  // the current state of server
   enum ServerState {
     kSlave,
     kLeaderIdle,
@@ -153,6 +128,48 @@ class MultiPaxos {
       return type == kNull;
     }
   };
+  /*! \brief the state of the server */
+  ServerState server_state;
+  /*! \brief the propose id used by the lastest leader it known */
+  ProposalID leader;
+  /*! \brief server record of set of states to be proposed */
+  std::vector<ProposeState> server_rec;
+  /*! \brief current instance being proposed */
+  unsigned current_instance;
+  /*! \brief node id of current node */
+  int node_id;
+  
+  // notify that the queue is empty
+  virtual void OnQueueEmpty(void) {}
+  virtual void SendTo(int nid, const utils::Message &msg) {
+    post_lock.Lock();
+    post->SendTo(nid, msg);
+    post_lock.Unlock();
+  }
+  virtual void AddCommand(TValue value) {
+    queue_lock.Lock();
+    queue.push(value);
+    queue_lock.Unlock();
+  }
+ private:
+  /*! \brief type of message that can be send to the paxos */
+  enum MessageType {
+    kTerminate = 0,
+    // simple acknowledge that leader is alive
+    kLeaderAck = 1,
+    // timeout message, can be used to simulate timeout
+    kTimeout = 2,
+    // the request message to prepare
+    kPrepareRequest = 3,
+    // the request message to prepare
+    kPrepareReturn = 4,
+    // request for accept
+    kAcceptRequest = 5,
+    // return message from accept
+    kAcceptReturn = 6,
+    // notify that some value is chosen
+    kChosenNotify = 7
+  };
   // the record to be returned to the proposer
   struct AcceptRecord {
     // proposal id
@@ -163,10 +180,6 @@ class MultiPaxos {
     TValue value;                 
   };
   // ---- Server data structure -----
-  /*! \brief the state of the server */
-  ServerState server_state;
-  /*! \brief the propose id used by the lastest leader it known */
-  ProposalID leader;
   /*! \brief size of majority set */
   int majority_size;
   // timeout counter, used to record timeout since last state change
@@ -175,14 +188,10 @@ class MultiPaxos {
   int promise_counter;  
   /*! \brief leader state, whether promise is replied */
   std::vector<bool> promise_replied;
-  /*! \brief leader state, whether accept is replied */
-  std::vector<bool> accept_replied;
   /*! \brief number of accept we received so far */
   int accept_counter;
-  /*! \brief server record of set of states to be proposed */
-  std::vector<ProposeState> server_rec;
-  /*! \brief current instance being proposed */
-  unsigned current_instance;
+  /*! \brief leader state, whether accept is replied */
+  std::vector<bool> accept_replied;
   //---- Accepter data structure ---
   /*! \brief the promise of the accepter, not to accept things before */
   ProposeState promise;
@@ -191,8 +200,6 @@ class MultiPaxos {
   //--- gobal structure ---
   /*! \brief post office that handles message passing*/
   IPostOffice *post;
-  /*! \brief node id of current node */
-  int node_id;
   // temporal out message
   utils::Message out_msg;
   // propose queue, store value that have not yet been proposed
@@ -210,8 +217,7 @@ class MultiPaxos {
              server_rec[current_instance].type == ProposeState::kChosen) {
         current_instance += 1;
       }      
-    }
-    
+    }    
     // change to leader state, need to prepare the necessary data structures
     if (server_state == kLeaderPrepare) {
       promise_counter = 0;
@@ -338,18 +344,23 @@ class MultiPaxos {
   }
   // handling the leader ack message
   inline void HandleLeaderAck(utils::IStream &in, int sender) {
-    if (server_state != kSlave) return;
     ProposalID pid;
     utils::Check(in.Read(&pid, sizeof(pid)) != 0, "invalid message");
-    // update leader record, reset timeout counter
-    if (leader <= pid) {
-      leader = pid; timeout_counter = 0;
+    // simply ignore this one, this is invalid leader
+    if (pid < leader)  return;
+    // cleanup timeout counter
+    timeout_counter = 0;
+    // if we get a ack with larger pid
+    // this means we must change to slave state, if we are in LeaderState
+    if (leader < pid) {
+      leader = pid; this->ChangeServerState(kSlave);
     }
   }
   // handling the return value of prepare
   inline void HandleChosenNotify(utils::IStream &in, int sender) {
     if (server_state != kSlave) return;
-    AcceptRecord r;
+    // every broadcast message of chosen must be correct
+    AcceptRecord r;    
     utils::Check(in.Read(&r, sizeof(r)) != 0, "invalid message");
     if (server_rec.size() <= r.inst_index) {
       server_rec.resize(r.inst_index + 1);
@@ -358,10 +369,16 @@ class MultiPaxos {
     server_rec[r.inst_index].pid = r.pid;
     server_rec[r.inst_index].value = r.value;
     // update leader record, if needed
-    if (leader < r.pid) leader = r.pid;
+    if (leader <= r.pid) {
+      leader = r.pid;
+      // valid message, reset timeout counter
+      timeout_counter = 0;
+    }
   }
   // handling the return value of prepare
   inline void HandlePrepareReturn(utils::IStream &in, int sender) {
+    // valid message, reset timeout counter
+    timeout_counter = 0;
     // we already switch to slave state, ignore the message
     if (server_state != kLeaderPrepare) return;
     ProposalID pid;
@@ -408,6 +425,8 @@ class MultiPaxos {
   }
   // handling the return value of prepare
   inline void HandleAcceptReturn(utils::IStream &in, int sender) {
+    // valid message, reset timeout counter
+    timeout_counter = 0;
     // we already switch to different state, ignore the message
     if (server_state != kLeaderAccept) return;
     ProposalID pid;
@@ -511,7 +530,5 @@ class MultiPaxos {
     }
   }
 };
-
 }  // namespace consencus
 #endif
-
