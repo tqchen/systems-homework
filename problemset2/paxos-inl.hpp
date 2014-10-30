@@ -32,8 +32,9 @@ class MultiPaxos {
     queue_lock.Destroy();
     post_lock.Destroy();
   }
-  // start running
-  inline void Run(void) {
+ protected:
+  // running a paxos server, doing MultiPaxos
+  inline void RunServer(void) {
     // every start wantin to be a leader 
     this->ChangeServerState(kLeaderPrepare);
     utils::Message msg;
@@ -74,7 +75,6 @@ class MultiPaxos {
       }
     }
   }
- protected:
   // the current state of server
   enum ServerState {
     kSlave,
@@ -138,7 +138,7 @@ class MultiPaxos {
   unsigned current_instance;
   /*! \brief node id of current node */
   int node_id;
-  
+    
   // notify that the queue is empty
   virtual void OnQueueEmpty(void) {}
   virtual void SendTo(int nid, const utils::Message &msg) {
