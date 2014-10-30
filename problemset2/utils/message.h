@@ -20,9 +20,13 @@ struct Message : public ISeekStream {
   // maximum size of the buffer
   const static int kMaxSize = 4 << 20;
   // data content 
-  char data[kMaxSize];
+  char *data;
   // constructor
   Message(void) : message_size(0), curr_ptr_(0) {
+    data = new char[kMaxSize];
+  }
+  ~Message(void) {
+    delete [] data;
   }
   virtual size_t Read(void *ptr, size_t size) {
     utils::Assert(curr_ptr_ <= message_size,

@@ -77,6 +77,16 @@ inline void LogPrintf(const char *fmt, ...) {
   vprintf(fmt, args);
   va_end(args);
 }
+
+/*! \brief seed the PRNG */
+inline void Seed(unsigned seed) {
+  srand(seed);
+}
+/*! \brief basic function, uniform */
+inline double Uniform(void) {
+  return static_cast<double>(rand()) / (static_cast<double>(RAND_MAX)+1.0);
+}
+
 } // namespace utils
 #endif
 
