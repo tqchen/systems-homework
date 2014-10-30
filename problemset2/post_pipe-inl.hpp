@@ -95,7 +95,7 @@ class PostOfficePipe {
  private:
   // the information about each node
   struct NodeInfo {
-    int pipefd[2];    
+    int pipefd[2];
     utils::Mutex lock;
     // the probability of packet being dropped
     float drop_rate;

@@ -18,70 +18,20 @@ namespace consencus {
 template<typename TValue>
 class MultiPaxos {
  public:
-  MultiPaxos(IPostOffice *post) : post(post) {
+  MultiPaxos(IPostOffice *post, int num_server) : post(post) {
     this->node_id = post->GetRank();
+    this->num_server = num_server;
+    utils::Check(num_server <=  post->WorldSize(),
+                 "number of server exceed limit");
     timeout_counter = 0;
     timeout_limit = 20;
-    majority_size = post->WorldSize() / 2 + 1;
-    leader.node_id = 0; leader.counter = 0;
+    majority_size = num_server / 2 + 1;
+    leader.node_id = 0; 
+    leader.counter = 0;
     current_instance = 0;
-    queue_lock.Init();
-    post_lock.Init();
   }
   virtual ~MultiPaxos(void) {
-    queue_lock.Destroy();
-    post_lock.Destroy();
   }
- protected:
-  // running a paxos server, doing MultiPaxos
-  inline void RunServer(void) {
-    // every start wantin to be a leader 
-    this->ChangeServerState(kLeaderPrepare);
-    utils::Message msg;
-    while (true) {
-      bool ret = post->RecvFrom(&msg);
-      if (!ret) {
-        this->HandleTimeOut(); continue;
-      }
-      msg.Seek(0);
-      int sender;
-      MessageType type;
-      // first two are always sender and type
-      utils::Check(msg.Read(&sender, sizeof(sender)) != 0, "invalid message");
-      utils::Check(msg.Read(&type, sizeof(type)) != 0, "invalid message");
-      if (type == kTimeout) {
-        this->HandleTimeOut(); continue;
-      }
-      // when message means terminate
-      if (type == kTerminate) break;
-      // always clear and stamp current node id in out_msg
-      out_msg.Clear(); out_msg.WriteT(node_id);
-      switch(type) {
-        case kTerminate: break;
-        case kAcceptRequest: {
-          this->HandleAcceptReq(msg, out_msg); 
-          this->SendTo(sender, out_msg);
-          break;
-        }
-        case kPrepareRequest: {
-          this->HandlePrepareReq(msg, out_msg); 
-          this->SendTo(sender, out_msg);
-          break;
-        }
-        case kPrepareReturn: this->HandlePrepareReturn(msg, sender); break; 
-        case kAcceptReturn: this->HandleAcceptReturn(msg, sender); break; 
-        case kChosenNotify: this->HandleChosenNotify(msg, sender); break;
-        default: utils::Error("unknown message type");
-      }
-    }
-  }
-  // the current state of server
-  enum ServerState {
-    kSlave,
-    kLeaderIdle,
-    kLeaderPrepare,
-    kLeaderAccept
-  };
   /*! 
    * \brief proposal ID, consists of counter and node id of proposer   
    */
@@ -103,7 +53,81 @@ class MultiPaxos {
       return node_id <= b.node_id;
     }
   };
-  /*! 
+  /*! \brief type of message that can be send to the paxos */
+  enum MessageType {
+    kTerminate = 0,
+    // simple acknowledge that leader is alive
+    kLeaderAck = 1,
+    // timeout message, can be used to simulate timeout
+    kTimeout = 2,
+    // the request message to prepare
+    kPrepareRequest = 3,
+    // the request message to prepare
+    kPrepareReturn = 4,
+    // request for accept
+    kAcceptRequest = 5,
+    // return message from accept
+    kAcceptReturn = 6,
+    // notify that some value is chosen
+    kChosenNotify = 7,
+    // client request, trap into client request handler
+    kClientRequest = 8
+  };
+  // running a paxos server, doing MultiPaxos
+  inline void RunServer(void) {
+    // every start wantin to be a leader 
+    this->ChangeServerState(kLeaderPrepare);
+    utils::Message msg;
+    while (true) {
+      bool ret = post->RecvFrom(&msg);
+      if (!ret) {
+        this->HandleTimeOut(); continue;
+      }
+      msg.Seek(0);
+      int sender;
+      MessageType type;
+      // first two are always sender and type
+      utils::Check(msg.Read(&sender, sizeof(sender)) != 0, "invalid message");
+      utils::Check(msg.Read(&type, sizeof(type)) != 0, "invalid message");
+      if (type == kTimeout) {
+        this->HandleTimeOut(); continue;
+      }
+      // when message means terminate
+      if (type == kTerminate) {
+        server_state = kTerminated; break;
+      }
+      // always clear and stamp current node id in out_msg
+      out_msg.Clear(); out_msg.WriteT(node_id);
+      switch(type) {
+        case kTerminate: break;
+        case kAcceptRequest: {
+          this->HandleAcceptReq(msg, out_msg); 
+          post->SendTo(sender, out_msg);
+          break;
+        }
+        case kPrepareRequest: {
+          this->HandlePrepareReq(msg, out_msg); 
+          post->SendTo(sender, out_msg);
+          break;
+        }
+        case kClientRequest: this->HandleClientRequest(msg, sender); break;
+        case kPrepareReturn: this->HandlePrepareReturn(msg, sender); break; 
+        case kAcceptReturn: this->HandleAcceptReturn(msg, sender); break; 
+        case kChosenNotify: this->HandleChosenNotify(msg, sender); break;
+        default: utils::Error("unknown message type");
+      }
+    }
+  }
+ protected:
+  // the current state of server
+  enum ServerState {
+    kSlave,
+    kLeaderIdle,
+    kLeaderPrepare,
+    kLeaderAccept,
+    kTerminated
+  };
+  /*!
    * \brief accept record, contains a indicator that it is null(no record so far)
    *        or is_null == false and pid is the most recent proposal ID
    */
@@ -128,6 +152,13 @@ class MultiPaxos {
       return type == kNull;
     }
   };
+  //--- gobal structure ---
+  /*! \brief post office that handles message passing*/
+  IPostOffice *post;
+  // temporal out message
+  utils::Message out_msg;
+  // propose queue, store value that have not yet been proposed
+  std::queue<TValue> queue;
   /*! \brief the state of the server */
   ServerState server_state;
   /*! \brief the propose id used by the lastest leader it known */
@@ -138,131 +169,15 @@ class MultiPaxos {
   unsigned current_instance;
   /*! \brief node id of current node */
   int node_id;
-    
-  // notify that the queue is empty
-  virtual void OnQueueEmpty(void) {}
-  virtual void SendTo(int nid, const utils::Message &msg) {
-    post_lock.Lock();
-    post->SendTo(nid, msg);
-    post_lock.Unlock();
-  }
-  virtual void AddCommand(TValue value) {
-    queue_lock.Lock();
-    queue.push(value);
-    queue_lock.Unlock();
-  }
- private:
-  /*! \brief type of message that can be send to the paxos */
-  enum MessageType {
-    kTerminate = 0,
-    // simple acknowledge that leader is alive
-    kLeaderAck = 1,
-    // timeout message, can be used to simulate timeout
-    kTimeout = 2,
-    // the request message to prepare
-    kPrepareRequest = 3,
-    // the request message to prepare
-    kPrepareReturn = 4,
-    // request for accept
-    kAcceptRequest = 5,
-    // return message from accept
-    kAcceptReturn = 6,
-    // notify that some value is chosen
-    kChosenNotify = 7
-  };
-  // the record to be returned to the proposer
-  struct AcceptRecord {
-    // proposal id
-    ProposalID pid;
-    // instance index
-    unsigned inst_index;
-    // the proposed value
-    TValue value;                 
-  };
-  // ---- Server data structure -----
-  /*! \brief size of majority set */
-  int majority_size;
-  // timeout counter, used to record timeout since last state change
-  int timeout_counter, timeout_limit;
-  /*! \brief number of promise we received so far */
-  int promise_counter;  
-  /*! \brief leader state, whether promise is replied */
-  std::vector<bool> promise_replied;
-  /*! \brief number of accept we received so far */
-  int accept_counter;
-  /*! \brief leader state, whether accept is replied */
-  std::vector<bool> accept_replied;
-  //---- Accepter data structure ---
-  /*! \brief the promise of the accepter, not to accept things before */
-  ProposeState promise;
-  /*! \brief record of accepted proposal in each of instance */
-  std::vector<ProposeState> accepted_rec;
-  //--- gobal structure ---
-  /*! \brief post office that handles message passing*/
-  IPostOffice *post;
-  // temporal out message
-  utils::Message out_msg;
-  // propose queue, store value that have not yet been proposed
-  std::queue<TValue> queue;
-  // command lock 
-  utils::Mutex queue_lock, post_lock;
-  
-  // change server state to state
-  inline void ChangeServerState(ServerState state) {
-    server_state = state;
-    timeout_counter = 0;
-    if (server_state == kLeaderPrepare || server_state == kLeaderAccept) {
-      // advance current instance to latest not decided value
-      while (current_instance < server_rec.size() &&
-             server_rec[current_instance].type == ProposeState::kChosen) {
-        current_instance += 1;
-      }      
-    }    
-    // change to leader state, need to prepare the necessary data structures
-    if (server_state == kLeaderPrepare) {
-      promise_counter = 0;
-      promise_replied.resize(post->WorldSize());
-      std::fill(promise_replied.begin(), promise_replied.end(), false);
-      leader.node_id = this->node_id;
-      leader.counter += 1;      
-      this->SendPrepareReq();      
-      return;
-    }
-    if (server_state == kLeaderAccept) {
-      // we are running out of history sequence
-      if (current_instance == server_rec.size()) {
-        if (queue.size() == 0) {
-          // switch to idle state, no new command
-          this->server_state = kLeaderIdle;
-          // notify observer
-          this->OnQueueEmpty();
-          return;
-        } else {
-          // push the command in the queue to the proposal
-          ProposeState s;
-          s.pid = leader;
-          s.type = ProposeState::kAccepted;
-          queue_lock.Lock();
-          s.value = queue.front();
-          queue.pop();
-          queue_lock.Unlock();
-          server_rec.push_back(s);
-        }
-      }
-      accept_counter = 0;
-      accept_replied.resize(post->WorldSize());
-      std::fill(accept_replied.begin(), accept_replied.end(), false);
-      ProposeState &s = server_rec[current_instance];
-      s.pid = leader;
-      utils::Assert(!s.is_null(), "this code does not allow lag command yet");
-      // in future, send no-op when there is lag
-      this->SendAcceptReq();
-      return;
-    }
-  }
+  // ---- following two functions are left to be implemented by subclass----
+  /*! \brief to be implemented by the subclass, handle client specific request */
+  virtual void HandleClientRequest(utils::IStream &in, int sender) = 0;
+  /*! \brief to be implemented by the subclass, handle the event that inst_index is being chosen */
+  virtual void HandleChosenEvent(unsigned inst_index) = 0;
   // handle time out event
-  inline void HandleTimeOut(void) {
+  virtual void HandleTimeOut(void) {
     timeout_counter += 1;
+    // handle timeout
     if (server_state == kLeaderIdle) {
       // try to switch to accept state, if possible
       this->ChangeServerState(kLeaderAccept);
@@ -282,8 +197,88 @@ class MultiPaxos {
       case kLeaderPrepare: this->SendPrepareReq(); return;
       case kLeaderAccept: this->SendAcceptReq(); return;
       case kLeaderIdle:
+      case kTerminated: utils::Error("invalid server state");
       case kSlave: return; // do nothing
     }   
+  }
+ private:
+  // the record to be returned to the proposer
+  struct AcceptRecord {
+    // proposal id
+    ProposalID pid;
+    // instance index
+    unsigned inst_index;
+    // the proposed value
+    TValue value;                 
+  };
+  // ---- Server data structure -----
+  /*! \brief total number of servers in paxos group */
+  int num_server;
+  /*! \brief size of majority set */
+  int majority_size;
+  // timeout counter, used to record timeout since last state change
+  int timeout_counter, timeout_limit;
+  /*! \brief number of promise we received so far */
+  int promise_counter;  
+  /*! \brief leader state, whether promise is replied */
+  std::vector<bool> promise_replied;
+  /*! \brief number of accept we received so far */
+  int accept_counter;
+  /*! \brief leader state, whether accept is replied */
+  std::vector<bool> accept_replied;
+  //---- Accepter data structure ---
+  /*! \brief the promise of the accepter, not to accept things before */
+  ProposeState promise;
+  /*! \brief record of accepted proposal in each of instance */
+  std::vector<ProposeState> accepted_rec;
+  // change server state to state
+  inline void ChangeServerState(ServerState state) {
+    server_state = state;
+    timeout_counter = 0;
+    if (server_state == kLeaderPrepare || server_state == kLeaderAccept) {
+      // advance current instance to latest not decided value
+      while (current_instance < server_rec.size() &&
+             server_rec[current_instance].type == ProposeState::kChosen) {
+        current_instance += 1;
+      }      
+    }    
+    // change to leader state, need to prepare the necessary data structures
+    if (server_state == kLeaderPrepare) {
+      promise_counter = 0;
+      promise_replied.resize(num_server);
+      std::fill(promise_replied.begin(), promise_replied.end(), false);
+      leader.node_id = this->node_id;
+      leader.counter += 1;      
+      this->SendPrepareReq();      
+      return;
+    }
+    if (server_state == kLeaderAccept) {
+      // we are running out of history sequence
+      if (current_instance == server_rec.size()) {
+        if (queue.size() == 0) {
+          // switch to idle state, no new command
+          this->ChangeServerState(kLeaderIdle);
+          return;
+        } else {
+          // push the command in the queue to the proposal
+          ProposeState s;
+          s.pid = leader;
+          s.type = ProposeState::kAccepted;
+          s.value = queue.front();
+          queue.pop();
+          server_rec.push_back(s);
+        }
+      }
+      accept_counter = 0;
+      accept_replied.resize(num_server);
+      std::fill(accept_replied.begin(), accept_replied.end(), false);
+      ProposeState &s = server_rec[current_instance];
+      s.pid = leader;
+      utils::Assert(!s.is_null(), "this code does not allow lag command yet");
+      // in future, send no-op when there is lag
+      this->SendAcceptReq();
+      return;
+    }
   }
   // send message that current instance is chosen
   inline void SendChosenNotify(unsigned inst_index) {
@@ -299,35 +294,32 @@ class MultiPaxos {
   inline void SendLeaderAck(void) {
     utils::Assert(server_state == kLeaderIdle, "wrong state to send prepare");
     utils::Assert(leader.node_id == this->node_id, "leader node id inconsistent");
-    int ninst = post->WorldSize();
     out_msg.Clear();
     out_msg.WriteT(node_id);
     out_msg.WriteT(kLeaderAck);
     out_msg.WriteT(leader);
-    for (int i = 0; i < ninst; ++i) {
-      this->SendTo(i, out_msg);
+    for (int i = 0; i < num_server; ++i) {
+      post->SendTo(i, out_msg);
     }
   }
   // send prepare request to every node that has not replied yet
   inline void SendPrepareReq(void) {
     utils::Assert(server_state == kLeaderPrepare, "wrong state to send prepare");
     utils::Assert(leader.node_id == this->node_id, "leader node id inconsistent");
-    int ninst = post->WorldSize();
     out_msg.Clear();
     out_msg.WriteT(node_id);
     out_msg.WriteT(kPrepareRequest);
     out_msg.WriteT(leader);
     out_msg.WriteT(current_instance);
-    for (int i = 0; i < ninst; ++i) {
+    for (int i = 0; i < num_server; ++i) {
       if (promise_replied[i]) continue;
-      this->SendTo(i, out_msg);
+      post->SendTo(i, out_msg);
     }
   }
   // send prepare request to every node that has not replied yet
   inline void SendAcceptReq(void) {
     utils::Assert(server_state == kLeaderAccept, "wrong state to send prepare");
     utils::Assert(leader.node_id == this->node_id, "leader node id inconsistent");
-    int ninst = post->WorldSize();
     utils::Assert(server_rec[current_instance].pid == leader,
                   "send accepted req bug");
     out_msg.Clear();
@@ -336,10 +328,10 @@ class MultiPaxos {
     out_msg.WriteT(leader);
     out_msg.WriteT(server_rec[current_instance].value);
     out_msg.WriteT(current_instance);
-    for (int i = 0; i < ninst; ++i) {
+    for (int i = 0; i < num_server; ++i) {
       if (!promise_replied[i]) continue;
       if (accept_replied[i]) continue;
-      this->SendTo(i, out_msg);
+      post->SendTo(i, out_msg);
     }
   }
   // handling the leader ack message
@@ -441,7 +433,8 @@ class MultiPaxos {
       accept_counter += 1;
       if (accept_counter >= majority_size) {
         // mark current instance as chosen!!
-        server_rec[current_instance].type = ProposeState::kChosen;        
+        server_rec[current_instance].type = ProposeState::kChosen;
+        this->HandleChosenEvent(current_instance);
         this->ChangeServerState(kLeaderAccept);
       }
     } else {
