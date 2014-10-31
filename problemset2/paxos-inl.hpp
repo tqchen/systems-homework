@@ -1,12 +1,10 @@
 #ifndef PAXOS_INL_H_
 #define PAXOS_INL_H_
-
 #include <queue>
 #include "./utils/utils.h"
 #include "./utils/message.h"
 #include "./post_office.h"
 #include "./utils/thread.h"
-
 
 namespace consencus {
 /*! 
@@ -18,20 +16,6 @@ namespace consencus {
 template<typename TValue>
 class MultiPaxos {
  public:
-  MultiPaxos(IPostOffice *post, int num_server) : post(post) {
-    this->node_id = post->GetRank();
-    this->num_server = num_server;
-    utils::Check(num_server <=  post->WorldSize(),
-                 "number of server exceed limit");
-    timeout_counter = 0;
-    timeout_limit = 20;
-    majority_size = num_server / 2 + 1;
-    leader.node_id = 0; 
-    leader.counter = 0;
-    current_instance = 0;
-  }
-  virtual ~MultiPaxos(void) {
-  }
   /*! 
    * \brief proposal ID, consists of counter and node id of proposer   
    */
@@ -73,6 +57,20 @@ class MultiPaxos {
     // client request, trap into client request handler
     kClientRequest = 8
   };
+  MultiPaxos(IPostOffice *post, int num_server) : post(post) {
+    this->node_id = post->GetRank();
+    this->num_server = num_server;
+    utils::Check(num_server <=  post->WorldSize(),
+                 "number of server exceed limit");
+    timeout_counter = 0;
+    timeout_limit = 20;
+    majority_size = num_server / 2 + 1;
+    leader.node_id = 0; 
+    leader.counter = 0;
+    current_instance = 0;
+  }
+  virtual ~MultiPaxos(void) {
+  }
   // running a paxos server, doing MultiPaxos
   inline void RunServer(void) {
     // every start wantin to be a leader 
@@ -84,7 +82,7 @@ class MultiPaxos {
         this->HandleTimeOut(); continue;
       }
       msg.Seek(0);
-      int sender;
+      unsigned sender;
       MessageType type;
       // first two are always sender and type
       utils::Check(msg.Read(&sender, sizeof(sender)) != 0, "invalid message");
@@ -157,8 +155,6 @@ class MultiPaxos {
   IPostOffice *post;
   // temporal out message
   utils::Message out_msg;
-  // propose queue, store value that have not yet been proposed
-  std::queue<TValue> queue;
   /*! \brief the state of the server */
   ServerState server_state;
   /*! \brief the propose id used by the lastest leader it known */
@@ -168,10 +164,16 @@ class MultiPaxos {
   /*! \brief current instance being proposed */
   unsigned current_instance;
   /*! \brief node id of current node */
-  int node_id;
+  unsigned node_id;
   // ---- following two functions are left to be implemented by subclass----
   /*! \brief to be implemented by the subclass, handle client specific request */
-  virtual void HandleClientRequest(utils::IStream &in, int sender) = 0;
+  virtual void HandleClientRequest(utils::IStream &in, unsigned sender) = 0;
+  /*! 
+   * \brief get next new value
+   * \param p_value address to put the new value into
+   * \return true if there is new value, false if no new value exist
+   */
+  virtual bool GetNewValue(TValue *p_value) = 0;
   /*! \brief to be implemented by the subclass, handle the event that inst_index is being chosen */
   virtual void HandleChosenEvent(unsigned inst_index) = 0;
   // handle time out event
@@ -201,6 +203,21 @@ class MultiPaxos {
       case kSlave: return; // do nothing
     }   
   }
+  // send message that current instance is chosen
+  inline void SendChosenNotify(unsigned inst_index) {
+    AcceptRecord r;
+    r.pid = leader; r.inst_index = inst_index;
+    r.value = server_rec[inst_index].value;
+    out_msg.Clear();
+    out_msg.WriteT(node_id);
+    out_msg.WriteT(kChosenNotify);
+    out_msg.WriteT(r);
+    for (int i = 0; i < num_server; ++i) {
+      if (i != node_id) {
+        post->SendTo(i, out_msg);
+      }
+    }
+  }
  private:
   // the record to be returned to the proposer
   struct AcceptRecord {
@@ -211,6 +228,7 @@ class MultiPaxos {
     // the proposed value
     TValue value;                 
   };
+  ////////////////////////////////
   // ---- Server data structure -----
   /*! \brief total number of servers in paxos group */
   int num_server;
@@ -226,11 +244,14 @@ class MultiPaxos {
   int accept_counter;
   /*! \brief leader state, whether accept is replied */
   std::vector<bool> accept_replied;
+  /////////////////////////////////
   //---- Accepter data structure ---
   /*! \brief the promise of the accepter, not to accept things before */
   ProposeState promise;
   /*! \brief record of accepted proposal in each of instance */
   std::vector<ProposeState> accepted_rec;
+  /////////////////////
+  //---- Server Logic------
   // change server state to state
   inline void ChangeServerState(ServerState state) {
     server_state = state;
@@ -255,18 +276,18 @@ class MultiPaxos {
     if (server_state == kLeaderAccept) {
       // we are running out of history sequence
       if (current_instance == server_rec.size()) {
-        if (queue.size() == 0) {
-          // switch to idle state, no new command
-          this->ChangeServerState(kLeaderIdle);
-          return;
-        } else {
+        TValue value;
+        if (this->GetNewValue(&value)) {
+          // get new value to be proposed
           // push the command in the queue to the proposal
           ProposeState s;
           s.pid = leader;
           s.type = ProposeState::kAccepted;
-          s.value = queue.front();
-          queue.pop();
+          s.value = value;
           server_rec.push_back(s);
+        } else {
+          // switch to idle state, no new value so far
+          server_state = kLeaderIdle;
         }
       }
       accept_counter = 0;
@@ -279,16 +300,6 @@ class MultiPaxos {
       this->SendAcceptReq();
       return;
     }
-  }
-  // send message that current instance is chosen
-  inline void SendChosenNotify(unsigned inst_index) {
-    AcceptRecord r;
-    r.pid = leader; r.inst_index = inst_index;
-    r.value = server_rec[inst_index].value;
-    out_msg.Clear();
-    out_msg.WriteT(node_id);
-    out_msg.WriteT(kChosenNotify);
-    out_msg.WriteT(r);
   }
   // send ack to each node to tell them leader is still alive
   inline void SendLeaderAck(void) {
@@ -335,7 +346,7 @@ class MultiPaxos {
     }
   }
   // handling the leader ack message
-  inline void HandleLeaderAck(utils::IStream &in, int sender) {
+  inline void HandleLeaderAck(utils::IStream &in, unsigned sender) {
     ProposalID pid;
     utils::Check(in.Read(&pid, sizeof(pid)) != 0, "invalid message");
     // simply ignore this one, this is invalid leader
@@ -349,7 +360,7 @@ class MultiPaxos {
     }
   }
   // handling the return value of prepare
-  inline void HandleChosenNotify(utils::IStream &in, int sender) {
+  inline void HandleChosenNotify(utils::IStream &in, unsigned sender) {
     if (server_state != kSlave) return;
     // every broadcast message of chosen must be correct
     AcceptRecord r;    
@@ -368,7 +379,7 @@ class MultiPaxos {
     }
   }
   // handling the return value of prepare
-  inline void HandlePrepareReturn(utils::IStream &in, int sender) {
+  inline void HandlePrepareReturn(utils::IStream &in, unsigned sender) {
     // valid message, reset timeout counter
     timeout_counter = 0;
     // we already switch to slave state, ignore the message
@@ -416,7 +427,7 @@ class MultiPaxos {
     }
   }
   // handling the return value of prepare
-  inline void HandleAcceptReturn(utils::IStream &in, int sender) {
+  inline void HandleAcceptReturn(utils::IStream &in, unsigned sender) {
     // valid message, reset timeout counter
     timeout_counter = 0;
     // we already switch to different state, ignore the message
@@ -449,7 +460,9 @@ class MultiPaxos {
       }
     }
   }
-  // accepter: handle prepare
+  ///////////////////////////
+  // --- Accepter Logic-----
+  //////////////////////////
   inline void HandlePrepareReq(utils::IStream &in, utils::IStream &out) {
     // the proposal to be handled
     ProposalID pid;
@@ -489,7 +502,7 @@ class MultiPaxos {
    * \return a proposal ID, if it matchs pid, it means the proposal is acceped
    *  otherwise, the proposal is rejected, and the accepter thinks current leader is pid
    */
-  inline void HandleAcceptReq(utils::ISeekStream &in, utils::ISeekStream &out) {
+  inline void HandleAcceptReq(utils::IStream &in, utils::IStream &out) {
     // the proposal to be handled
     ProposalID pid; 
     // the proposed value

@@ -13,12 +13,12 @@ class IPostOffice {
  public:
   virtual ~IPostOffice(){}
   /*! \brief number of nodes in the group */
-  virtual int WorldSize(void) const = 0;
+  virtual unsigned WorldSize(void) const = 0;
   /*! 
    * \brief get the unique id of current node in the group 
    * this is ensured to be from 0 - n - 1
    */
-  virtual int GetRank(void) const = 0;
+  virtual unsigned GetRank(void) const = 0;
   /*! 
    * \brief recieve the message from any body in the world
    *  the message sender is not identified, and need to be encoded in the message it self if needed 
@@ -32,7 +32,7 @@ class IPostOffice {
    * \param nid node id 
    * \param msg the message 
    */  
-  virtual void SendTo(int nid, const utils::Message &msg) = 0;
+  virtual void SendTo(unsigned nid, const utils::Message &msg) = 0;
 };
 }  // namespace consencus
 #endif

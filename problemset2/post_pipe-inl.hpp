@@ -18,23 +18,23 @@ class PostOfficePipe {
   // a poster is one instance of post office
   class Poster : public IPostOffice {
    public:
-    virtual int WorldSize(void) const {
+    virtual unsigned WorldSize(void) const {
       return parent->WorldSize();
     }
-    virtual int GetRank(void) const {
+    virtual unsigned GetRank(void) const {
       return node;
     }
     virtual bool RecvFrom(utils::Message *msg) {
       return parent->RecvFrom(node, msg);
     }
-    virtual void SendTo(int nid, const utils::Message &msg) {
+    virtual void SendTo(unsigned nid, const utils::Message &msg) {
       parent->Send(node, nid, msg);
     }    
    protected:
     friend class PostOfficePipe;
-    Poster(int node, PostOfficePipe *parent)
+    Poster(unsigned node, PostOfficePipe *parent)
         : node(node), parent(parent) {}
-    int node;
+    unsigned node;
     PostOfficePipe *parent;
   };
   // the constructor
@@ -53,10 +53,10 @@ class PostOfficePipe {
     }
   }
   // get poster of i-th node
-  IPostOffice *GetPoster(int nid) {
+  IPostOffice *GetPoster(unsigned nid) {
     return &posters[nid];
   }
-  virtual bool RecvFrom(int nid, utils::Message *msg) {
+  virtual bool RecvFrom(unsigned nid, utils::Message *msg) {
     timeval timeout;
     // use 1 sec timeout
     timeout.tv_sec = 1;
@@ -72,7 +72,7 @@ class PostOfficePipe {
     utils::Assert(read(nodes[nid].pipefd[0], &msg->data, msg->message_size) != 0, "postoffice, cannot read");
     return true;
   }
-  virtual void Send(int from, int to, const utils::Message &msg) {
+  virtual void Send(unsigned from, unsigned to, const utils::Message &msg) {
     float drop_rate = 1.0f;
     if (from != to) { 
       drop_rate = std::min(nodes[from].drop_rate, nodes[to].drop_rate);
@@ -85,11 +85,11 @@ class PostOfficePipe {
     utils::Check(write(nodes[to].pipefd[1], &msg.data, msg.message_size) != -1, "pipe write fail");
     nodes[to].lock.Unlock();
   } 
-  virtual int WorldSize(void) const {
+  virtual unsigned WorldSize(void) const {
     return nodes.size();
   }
   // set drop rate of certain node
-  virtual void SetDropRate(int nid, float p) {
+  virtual void SetDropRate(unsigned nid, float p) {
     nodes[nid].drop_rate = p;
   }
  private:
