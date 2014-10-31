@@ -3,6 +3,8 @@
 
 #include <queue>
 #include <deque>
+#include <list>
+#include <utility>
 
 #include "./utils/utils.h"
 #include "./utils/message.h"
@@ -20,8 +22,7 @@ struct LockMessage {
     kClientLockGrantedAck,
     // server message to client 
     kServerLockGranted,
-    kServerAck,
-    kServerAckInvalid
+    kServerAck
   };
   /*! \brief type of the message */
   Type type;
@@ -59,6 +60,9 @@ class LockServer : public MultiPaxos<LockMessage> {
     LockMessage msg;
     in.Read(&msg, sizeof(msg));
     utils::Assert(msg.node_client == sender, "invalid client message");
+    if (msg.type == LockMessage::kClientLockGrantedAck) {
+      this->HandleLockGrantedAck(msg); return;
+    }
     if (!CheckChosen(msg)) {
       // avoid add duplicated elements into queue
       for (std::deque<LockMessage>::iterator it = queue.begin(); 
@@ -99,42 +103,63 @@ class LockServer : public MultiPaxos<LockMessage> {
       // if these cmd are skiped by HandleChosenEvent
       // these cmd are being proposed and chosen by another leader
       // the other leader will only send out the notification when holder is acknowledgeed
-      if (cmd_ptr != inst_index) {
-        lock_state[c.value.lock_index].holder_acked = true;
-      }
       ++cmd_ptr;
     }
     utils::Assert(cmd_ptr == inst_index + 1, "BUG");
-    // if holder is already acknowledged
-    if (lock_state[cmd.lock_index].holder_acked) {
+    // if this instance does not result in new holder
+    // broadcast the chosen information now
+    if (!lock_state[cmd.lock_index].new_holder) {
       this->SendChosenNotify(inst_index);
-    }         
+    } else {
+      const LockMessage &h = lock_state[cmd.lock_index].holder;
+      holder_notify.push_back(std::make_pair(inst_index, h));
+      this->SendHolderNotification(h);
+    }
+  }
+  inline void HandleLockGrantedAck(const LockMessage &msg) {
+    for (std::list< std::pair<unsigned, LockMessage> >::iterator 
+             it = holder_notify.begin(); it != holder_notify.end(); ++it) {
+      if (it->second == msg) {
+        // get ack back from holder, now it is safe to broadcast 
+        // the chosen message
+        this->SendChosenNotify(it->first);
+        // delete from notification queue
+        holder_notify.erase(it);
+        break;
+      }
+    }
   }
   virtual void HandleTimeOut(void) {
+    // re-transmit lock grant message
+    for (std::list< std::pair<unsigned, LockMessage> >::iterator it = holder_notify.begin();
+         it != holder_notify.end(); ++it) {
+      this->SendHolderNotification(it->second);
+    }
     Parent::HandleTimeOut();
   }
  private:
   // information about a lock
-  struct LockInfo {
-    // whether holder have acknowledged it is aware of owning the lock
-    bool holder_acked;
+  struct LockState {
+    // whether the holder have changed to a new holder in last execution
+    bool new_holder; 
     // the current holder of lock
     LockMessage holder;
     // the wait queue of the lock
     std::queue<LockMessage> wait_queue;
-    LockInfo(void) {
+    LockState(void) {
       holder.type = LockMessage::kNull;
-      holder_acked = true;
+      new_holder = false;
     }
     // return whether this lock is hold by nobody
     inline bool no_holder(void) const {
       return holder.type == LockMessage::kNull;
     }
     // update the state by executing cmd
-    inline bool Exec(const LockMessage &cmd) {      
+    inline bool Exec(const LockMessage &cmd) {
+      new_holder = false;
       if (cmd.type == LockMessage::kLockRequest) {
         if (this->no_holder()) {
-          holder = cmd; holder_acked = false;
+          holder = cmd; new_holder = true;
         } else {
           wait_queue.push(cmd);
         }
@@ -144,7 +169,7 @@ class LockServer : public MultiPaxos<LockMessage> {
         if (cmd == holder) {
           if (wait_queue.size() != 0) {
             holder = wait_queue.front();
-            wait_queue.pop(); holder_acked = false;
+            wait_queue.pop(); new_holder = true;
           } else {
             holder.type = LockMessage::kNull;
           }
@@ -155,6 +180,14 @@ class LockServer : public MultiPaxos<LockMessage> {
       return true;
     }
   };
+  // send notification to holder that the lock has been granted
+  inline void SendHolderNotification(LockMessage msg) {
+    out_msg.Clear();
+    out_msg.WriteT(node_id);
+    out_msg.WriteT(LockMessage::kServerLockGranted);
+    out_msg.WriteT(msg);
+    post->SendTo(msg.node_client, out_msg);    
+  }
   // send server ack to the client to acknowledge a message has been chosen
   inline void SendServerAck(LockMessage msg) {
     out_msg.Clear();
@@ -188,14 +221,15 @@ class LockServer : public MultiPaxos<LockMessage> {
   // last executed command
   unsigned cmd_ptr;
   // lock state of each lock
-  std::vector<LockInfo> lock_state;
+  std::vector<LockState> lock_state;
   // the scan counter used to update the lastest information
   size_t latest_scan;
   // latest known value in queue from each node
   std::vector<LockMessage> latest_chosen;
   // propose queue, store value that have not yet been proposed
   std::deque<LockMessage> queue;
-
+  // the list of granted holder of the lock that not yet ack back to the server
+  std::list< std::pair<unsigned, LockMessage> > holder_notify;
 };
 } // namespace
 #endif
