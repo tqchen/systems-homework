@@ -117,7 +117,9 @@ class MultiPaxos {
       // first two are always sender and type
       utils::Check(msg.Read(&sender, sizeof(sender)) != 0, "invalid message");
       utils::Check(msg.Read(&type, sizeof(type)) != 0, "invalid message");
-      utils::LogPrintf("[%u] recv %s from %u\n", node_id, GetName(type), sender);
+      if (type != kLeaderAck) {
+        utils::LogPrintf("[%u] recv %s from %u\n", node_id, GetName(type), sender);
+      }
       if (type == kTimeout) {
         this->HandleTimeOut(); continue;
       }
@@ -291,7 +293,6 @@ class MultiPaxos {
     switch (server_state) {
       case kLeaderPrepare: utils::LogPrintf("[%d] LeaderPrepare\n", node_id); break;
       case kLeaderAccept: utils::LogPrintf("[%d] LeaderAccept\n", node_id); break;
-
       case kLeaderIdle: utils::LogPrintf("[%d] LeaderIdle\n", node_id); break; 
       case kSlave: utils::LogPrintf("[%d] Slave\n", node_id); break;
       default:;
