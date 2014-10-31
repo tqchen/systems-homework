@@ -1,0 +1,11 @@
+num_server=5
+num_node=8
+drop[0-7]=0.7
+exec[5]=lock[1]
+exec[6]=lock[1]
+sleep=10
+drop[0]=1
+drop[4]=1
+exec[5]=unlock[1]
+exec[5]=lock[1]
+exec[6]=unlock[1]
