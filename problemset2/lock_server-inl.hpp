@@ -23,7 +23,7 @@ struct LockMessage {
     // server message to client 
     kServerLockGranted,
     kServerAck
-  };
+  };  
   /*! \brief type of the message */
   Type type;
   /*! \brief the lock index that the client would like to aqquire */
@@ -39,11 +39,27 @@ struct LockMessage {
         counter == b.counter &&
         node_client == b.node_client;
   }
+  inline const char *GetTypeName(void) const {
+    switch (type) {
+      case kNull: return "kNull";
+      case kLockRequest: return "kLockRequest";
+      case kUnlockRequest: return "kUnlockRequest";
+      case kLockGrantedAck: return "kLockGrantedAck";
+      case kServerLockGranted: return "kServerLockGranted";
+      case kServerAck: return "kServerAck";
+    }
+    return "unknown";
+  }
   // two message are corresponds to same command
-  inline bool SameCommandAs(const LockMessage &b) const {
+  inline bool SameLockAs(const LockMessage &b) const {
     return lock_index == b.lock_index &&
-        counter == b.counter &&
         node_client == b.node_client;
+  }
+  inline void Diff(const LockMessage &b) const {
+    utils::Check(lock_index == b.lock_index, "LockMessage:lock_index diff");
+    utils::Check(counter == b.counter, "LockMessage:counter diff");
+    utils::Check(node_client == b.node_client, "LockMessage:node_client diff");
+    utils::Check(type == b.type, "LockMessage:type diff");
   }
 };
 
@@ -63,7 +79,7 @@ class LockServer : public MultiPaxos<LockMessage> {
     if (server_state == kSlave)  return;
     LockMessage msg;
     in.Read(&msg, sizeof(msg));
-    utils::Assert(msg.node_client == sender, "invalid client message");
+    utils::Assert(msg.node_client == sender, "[%u] invalid client message", node_id);
     // note: message maybe duplicated, use CheckChosen to remove duplicated message
     if (!CheckChosen(msg)) {
       // avoid add duplicated elements into queue
@@ -92,15 +108,16 @@ class LockServer : public MultiPaxos<LockMessage> {
   }
   virtual void HandleChosenEvent(unsigned inst_index) {
     utils::Assert(server_state != kSlave, "invalid server state");
+    utils::Assert(inst_index < server_rec.size(), "HandleChosenEvent");
     const LockMessage &cmd = server_rec[inst_index].value;
     // acknowledge that this command have been chosen
     this->SendServerAck(cmd);
-    
+    utils::LogPrintf("[%u] inst=%u (node=%u, counter=%u) task=%s is chosen\n", node_id, inst_index, cmd.node_client, cmd.counter, cmd.GetTypeName());
     while (cmd_ptr <= inst_index) {
       const ProposeState &c = server_rec[cmd_ptr];
       utils::Assert(c.type == ProposeState::kChosen, "invalid server rec, chosen");
       if (lock_state.size() <= c.value.lock_index) {
-        lock_state.resize(c.value.lock_index);
+        lock_state.resize(c.value.lock_index + 1);
       } 
       lock_state[c.value.lock_index].Exec(c.value);
       // if these cmd are skiped by HandleChosenEvent
@@ -150,7 +167,7 @@ class LockServer : public MultiPaxos<LockMessage> {
         }
         case LockMessage::kUnlockRequest: {
           // different ppl cannot unlock this lock, this is ignored
-          if (cmd == holder) {
+          if (cmd.SameLockAs(holder)) {
             if (wait_queue.size() != 0) {
               holder = wait_queue.front();
               wait_queue.pop(); holder_acked = false;
@@ -158,19 +175,22 @@ class LockServer : public MultiPaxos<LockMessage> {
               holder.type = LockMessage::kNull;
             }
           } else {
+            utils::Error("UnLock: Exec wrong command\n");
             return false;
           }
           return true;
         }
         case LockMessage::kLockGrantedAck: {
-          if (cmd.SameCommandAs(holder)) {
+          if (cmd.SameLockAs(holder)) {
             holder_acked = true;
           } else {
+            cmd.Diff(holder);
+            utils::Error("GrantAck: Exec wrong command\n");
             return false;
           }
           return true;
         }
-        default: utils::Error("invalid client message");
+        default: utils::Error("DEBUG: invalid client message");
       }
       return true;
     }
@@ -213,7 +233,7 @@ class LockServer : public MultiPaxos<LockMessage> {
         c.counter < msg.counter) {
       return false;
     } else {
-      utils::Assert(c == msg, "invalid client message");
+      // either it is same message, or some old message that is already bbeen chosen
       return true;
     }
   }

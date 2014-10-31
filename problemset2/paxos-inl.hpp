@@ -33,8 +33,12 @@ class MultiPaxos {
       return counter == b.counter && node_id == b.node_id;
     }
     inline bool operator<=(const ProposalID &b) const {
-      if (counter <= b.counter) return true;
-      return node_id <= b.node_id;
+      if (counter < b.counter) return true;
+      if (counter == b.counter) {
+        return node_id <= b.node_id;
+      } else {
+        return false;
+      }
     }
   };
   /*! \brief type of message that can be send to the paxos */
@@ -55,7 +59,9 @@ class MultiPaxos {
     // notify that some value is chosen
     kChosenNotify = 7,
     // client request, trap into client request handler
-    kClientRequest = 8
+    kClientRequest = 8,
+    // this message is used for testing, encourage the node to become leader
+    kBecomeLeader = 9
   };
   // get message type name
   inline static const char *GetName(MessageType t) {
@@ -118,7 +124,7 @@ class MultiPaxos {
       utils::Check(msg.Read(&sender, sizeof(sender)) != 0, "invalid message");
       utils::Check(msg.Read(&type, sizeof(type)) != 0, "invalid message");
       if (type != kLeaderAck) {
-        utils::LogPrintf("[%u] recv %s from %u\n", node_id, GetName(type), sender);
+        //utils::LogPrintf("[%u] recv %s from %u\n", node_id, GetName(type), sender);
       }
       if (type == kTimeout) {
         this->HandleTimeOut(); continue;
@@ -146,6 +152,10 @@ class MultiPaxos {
         case kLeaderAck: this->HandleLeaderAck(msg, sender); break;
         case kAcceptReturn: this->HandleAcceptReturn(msg, sender); break; 
         case kChosenNotify: this->HandleChosenNotify(msg, sender); break;
+        case kBecomeLeader: {
+          if (server_state == kSlave) this->ChangeServerState(kLeaderPrepare); 
+          break;
+        }
         case kTimeout: utils::Error("unexpected message timeout");
       }
     }
@@ -290,12 +300,8 @@ class MultiPaxos {
         current_instance += 1;
       }
     }
-    switch (server_state) {
-      case kLeaderPrepare: utils::LogPrintf("[%d] LeaderPrepare\n", node_id); break;
-      case kLeaderAccept: utils::LogPrintf("[%d] LeaderAccept\n", node_id); break;
-      case kLeaderIdle: utils::LogPrintf("[%d] LeaderIdle\n", node_id); break; 
-      case kSlave: utils::LogPrintf("[%d] Slave\n", node_id); break;
-      default:;
+    if (server_state == kSlave) {
+      utils::LogPrintf("[%d] Change to Slave\n", node_id);
     }
     // change to leader state, need to prepare the necessary data structures
     if (server_state == kLeaderPrepare) {
@@ -303,7 +309,8 @@ class MultiPaxos {
       promise_replied.resize(num_server);
       std::fill(promise_replied.begin(), promise_replied.end(), false);
       leader.node_id = this->node_id;
-      leader.counter += 1;      
+      leader.counter += 1;
+      utils::LogPrintf("[%d] LeaderPrepare\n", node_id); 
       this->SendPrepareReq();      
       return;
     }
@@ -319,6 +326,7 @@ class MultiPaxos {
           s.type = ProposeState::kAccepted;
           s.value = value;
           server_rec.push_back(s);
+          //utils::LogPrintf("[%d] LeaderAccept\n", node_id);
         } else {
           // switch to idle state, no new value so far
           server_state = kLeaderIdle; return;
@@ -370,6 +378,7 @@ class MultiPaxos {
     out_msg.WriteT(node_id);
     out_msg.WriteT(kPrepareRequest);
     out_msg.WriteT(leader);
+    
     out_msg.WriteT(current_instance);
     for (int i = 0; i < num_server; ++i) {
       if (promise_replied[i]) continue;
@@ -397,7 +406,7 @@ class MultiPaxos {
   // handling the leader ack message
   inline void HandleLeaderAck(utils::IStream &in, unsigned sender) {
     ProposalID pid;
-    utils::Check(in.Read(&pid, sizeof(pid)) != 0, "invalid message");
+    utils::Check(in.Read(&pid, sizeof(pid)) != 0, "HandleLeaderAck: invalid message");
     // simply ignore this one, this is invalid leader
     if (pid < leader)  return;
     // cleanup timeout counter
@@ -412,8 +421,8 @@ class MultiPaxos {
   inline void HandleChosenNotify(utils::IStream &in, unsigned sender) {
     if (server_state != kSlave) return;
     // every broadcast message of chosen must be correct
-    AcceptRecord r;    
-    utils::Check(in.Read(&r, sizeof(r)) != 0, "invalid message");
+    AcceptRecord r;
+    utils::Check(in.Read(&r, sizeof(r)) != 0, "HandleChosenNotify: invalid message");
     if (server_rec.size() <= r.inst_index) {
       server_rec.resize(r.inst_index + 1);
     }
@@ -450,8 +459,9 @@ class MultiPaxos {
           server_rec.resize(rec[i].inst_index + 1);
         }
         ProposeState &s = server_rec[rec[i].inst_index];
-        utils::Assert(s.type != ProposeState::kChosen,
-                      "accepted state already being chosen");        
+        // if this instance is already chosen, no need to mark it, simply skip it
+        if (s.type == ProposeState::kChosen) continue;
+        // otherwise mark it
         if (s.is_null() || s.pid < rec[i].pid) {
           s.type = ProposeState::kAccepted;
           s.pid = rec[i].pid;
@@ -461,13 +471,14 @@ class MultiPaxos {
       }
       promise_counter += 1;
       if (promise_counter >= majority_size) {
+        utils::LogPrintf("[%u] Leader change to Accept mode\n", node_id);
         this->ChangeServerState(kLeaderAccept);
       }
     } else {
       if (leader < pid) {
+        leader = pid;
         // new leader must be another machine, switch to slave mode
         utils::Assert(leader.node_id != this->node_id, "new leader bug");
-        leader = pid;
         this->ChangeServerState(kSlave);
       } else {
         // out-dated message, ignore it
@@ -500,9 +511,9 @@ class MultiPaxos {
       }
     } else {
       if (leader < pid) {
+        leader = pid;
         // new leader must be another machine, switch to slave mode
         utils::Assert(leader.node_id != this->node_id, "new leader bug");
-        leader = pid;
         this->ChangeServerState(kSlave);
       } else {
         // out-dated message, ignore it
@@ -525,7 +536,7 @@ class MultiPaxos {
     if (promise.is_null() || promise.pid <= pid) {
       promise.pid = pid;
       promise.type = ProposeState::kAccepted;
-      printf("[%u] promise (%u, %u)\n", node_id, pid.node_id, pid.counter);
+      //printf("[%u] promise (%u, %u)\n", node_id, pid.node_id, pid.counter);
       // attach the promise id to the data anyway
       out.WriteT(promise.pid);
       // return the accepted instance which are 
@@ -543,6 +554,7 @@ class MultiPaxos {
       // write all the instance id, value pairs
       out.Write(rec);
     } else {
+      //printf("[%u] rej (%u, %u)\n", node_id, pid.node_id, pid.counter);
       // failure, return the promised id 
       // so that the node know who is the leader the accepter thinks      
       out.WriteT(promise.pid);
@@ -573,7 +585,7 @@ class MultiPaxos {
         accepted_rec.resize(inst_index + 1);
       }
       if (!accepted_rec[inst_index].is_null()) {
-        utils::Assert(accepted_rec[inst_index].pid == pid, "can only accept same proposal");
+        utils::Assert(accepted_rec[inst_index].value == value, "can only accept same proposal");
       }
       accepted_rec[inst_index].type = ProposeState::kAccepted;
       accepted_rec[inst_index].pid = pid;

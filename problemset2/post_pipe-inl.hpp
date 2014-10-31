@@ -83,10 +83,12 @@ class PostOfficePipe {
   virtual void Send(unsigned from, unsigned to, const utils::Message &msg) {
     float drop_rate = 0.0f;
     if (from != to) { 
-      drop_rate = std::min(nodes[from].drop_rate, nodes[to].drop_rate);
+      drop_rate = std::max(nodes[from].drop_rate, nodes[to].drop_rate);
     }
     // drop the message, simulate network failure
-    if (utils::Uniform() < drop_rate) return;
+    if (utils::Uniform() < drop_rate) {
+      return;
+    }
     std::string tmp; 
     tmp.resize(msg.message_size);
     memcpy(&tmp[0], msg.data, msg.message_size);
@@ -101,6 +103,7 @@ class PostOfficePipe {
   // set drop rate of certain node
   virtual void SetDropRate(unsigned nid, float p) {
     nodes[nid].drop_rate = p;
+    utils::LogPrintf("[%u] droprate set to %g\n", nid, p);
   }
  private:
   /*!\brief entry point of loader thread */

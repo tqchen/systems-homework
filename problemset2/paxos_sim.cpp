@@ -51,8 +51,8 @@ class ClientThread {
         utils::LogPrintf("[%d] finish exec lock(%d)\n", nodeid, cmd.second);
       } else {
         utils::LogPrintf("[%d] start exec unlock(%d)\n", nodeid, cmd.second);
-        locker.Lock(cmd.second);
-        utils::LogPrintf("[%d] finish exec unlock[%d]\n", nodeid, cmd.second);
+        locker.UnLock(cmd.second);
+        utils::LogPrintf("[%d] finish exec unlock(%d)\n", nodeid, cmd.second);
       }
     }
   }  
@@ -93,7 +93,6 @@ class ServerThread {
   utils::Thread worker_thread;  
 };
 
-
 int main(int argc, char *argv[]) {
   if (argc < 3) { 
     printf("Usage: num_server num_nodes\n");
@@ -117,7 +116,7 @@ int main(int argc, char *argv[]) {
     std::vector<ClientThread*> clients;
     std::vector<ServerThread*> servers;
     for (int i = 0; i < nserver; ++i) {
-      servers.push_back(new ServerThread(post.GetPoster(i), nserver));
+      servers.push_back(new ServerThread(post.GetPoster(nserver-i-1), nserver));
     }
     for (int i = nserver; i < nnodes; ++i) {
       clients.push_back(new ClientThread(post.GetPoster(i), nserver, i));
@@ -128,13 +127,13 @@ int main(int argc, char *argv[]) {
     while (getline(&scmd, &n, stdin) != -1) {
       // remove \n
       scmd[strlen(scmd) - 1] = '\0';
-      n = 0;      
+      n = 0;  
       char name[256], val[256];
       if (sscanf(scmd, "%[^=]=%[^\n]\n", name, val) != 2) continue;
       if (!strncmp(name, "exec[", 5)) {
         int nid, lockid;
         utils::Check(sscanf(name, "exec[%d]", &nid) == 1, "invalid command");
-        utils::Check(nid >= nserver && nid < nnodes, "client id");
+        utils::Check(nid >= nserver && nid < nnodes, "client id");        
         if (sscanf(val, "lock[%d]", &lockid) == 1) {
           clients[nid - nserver]->RunCmd(0, lockid);
         } else {
@@ -142,12 +141,29 @@ int main(int argc, char *argv[]) {
           clients[nid - nserver]->RunCmd(1, lockid);
         }
       }
+      if (!strncmp(name, "drop[", 5)) {
+        int nid;
+        if (sscanf(name, "drop[%d]", &nid) != 1) continue;
+        post.SetDropRate(nid, atof(val));
+      }
+      if (!strcmp(name, "raise")) {
+        int nid = atoi(val);
+        utils::Message msg;
+        unsigned from = 0;
+        msg.WriteT(from);
+        msg.WriteT(LockServer::kBecomeLeader);
+        post.Send(0, nid, msg);
+        continue;
+      }
+      if (!strcmp(name, "sleep")) {
+        sleep(atoi(val)); continue;
+      }      
+      sleep(1);
     }
-    sleep(100);
+    sleep(1);
     for (size_t i = 0; i < clients.size(); ++i) {
       delete clients[i];
     }
-    printf("invalid command or end of file encountered finish working\n");
     for (size_t i = 0; i < servers.size(); ++i) {
       delete servers[i];
     }

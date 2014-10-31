@@ -27,22 +27,21 @@ class LockClient {
     ++req.counter;
     this->SendMessage(req);    
     int state = kLockRequestSent;
-
     while (state != kLockGrantedAcked) {
       bool ret = post->RecvFrom(&in_msg);
       if (!ret) {
         // time out and we are in state of waiting ack
-        if (state != kLockRequestAcked) {
-          this->SendMessage(req); continue;
-        }
+        if (state != kLockRequestAcked) this->SendMessage(req);
+        continue;
       }
       unsigned sender;
       LockMessage::Type type;
       LockMessage lock_msg;
+      in_msg.Seek(0);
       // first two are always sender and type
-      utils::Check(in_msg.Read(&sender, sizeof(sender)) != 0, "invalid message");
-      utils::Check(in_msg.Read(&type, sizeof(type)) != 0, "invalid message");
-      utils::Check(in_msg.Read(&lock_msg, sizeof(lock_msg)) != 0, "invalid message");
+      utils::Check(in_msg.Read(&sender, sizeof(sender)) != 0, "Lock-1: invalid message");
+      utils::Check(in_msg.Read(&type, sizeof(type)) != 0, "Lock-2: invalid message");
+      utils::Check(in_msg.Read(&lock_msg, sizeof(lock_msg)) != 0, "Lock-3:invalid message");
       // process different type of data
       switch (type) {
         case LockMessage::kServerAck: {
@@ -51,13 +50,16 @@ class LockClient {
           break;
         }
         case LockMessage::kServerLockGranted: {
+          // outdated message
+          if (lock_msg.counter < req.counter) break;
           if (state < kLockGranted) {
             utils::Assert(lock_msg == req, "invalid granted lock");
             state = kLockGranted;
             req.type = LockMessage::kLockGrantedAck;
             ++req.counter;
-            this->SendMessage(req);
           }
+          // whenever recv the message send req back
+          this->SendMessage(req);
           break;
         }
         default: utils::Error("invalid lock message type to client");
@@ -85,16 +87,17 @@ class LockClient {
       bool ret = post->RecvFrom(&in_msg);
       if (!ret) {
         // timeout, retransmit request
-        this->SendMessage(req);
+        this->SendMessage(req); continue;
       }
+      in_msg.Seek(0);
       // sender 
       unsigned sender;
       LockMessage::Type type;
       LockMessage lock_msg;
       // first two are always sender and type
-      utils::Check(in_msg.Read(&sender, sizeof(sender)) != 0, "invalid message");
-      utils::Check(in_msg.Read(&type, sizeof(type)) != 0, "invalid message");
-      utils::Check(in_msg.Read(&lock_msg, sizeof(lock_msg)) != 0, "invalid message");
+      utils::Check(in_msg.Read(&sender, sizeof(sender)) != 0, "Unlock-1: invalid message");
+      utils::Check(in_msg.Read(&type, sizeof(type)) != 0, "Unlock-2: invalid message");
+      utils::Check(in_msg.Read(&lock_msg, sizeof(lock_msg)) != 0, "Unlock-3: invalid message");
       // get ack from server, can break out
       if (lock_msg == req && type == LockMessage::kServerAck) break;
     }
