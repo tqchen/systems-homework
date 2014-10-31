@@ -7,7 +7,7 @@
 #include "./utils/thread.h"
 
 namespace consencus {
-/*! 
+/*!
  * \brief multi instance paxos 
  *  this is a template class, so that we can handle various value type 
  *  by specifyig the TValue
@@ -68,16 +68,31 @@ class MultiPaxos {
     leader.node_id = 0; 
     leader.counter = 0;
     current_instance = 0;
+    this->shutdown = true;
   }
   virtual ~MultiPaxos(void) {
+    this->Shutdown();
+  }
+  inline void Shutdown(void){
+    if (shutdown) return;
+    shutdown_finish.Init(0);
+    this->shutdown = true;
+    out_msg.Clear();
+    out_msg.WriteT(node_id);
+    out_msg.WriteT(kTerminate);
+    post->SendTo(node_id, out_msg);
+    shutdown_finish.Wait();
+    shutdown_finish.Destroy();
   }
   // running a paxos server, doing MultiPaxos
   inline void RunServer(void) {
+    this->shutdown = false;
     // every start wantin to be a leader 
     this->ChangeServerState(kLeaderPrepare);
     utils::Message msg;
-    while (true) {
+    while (!shutdown) {
       bool ret = post->RecvFrom(&msg);
+      if (shutdown) break;
       if (!ret) {
         this->HandleTimeOut(); continue;
       }
@@ -115,6 +130,8 @@ class MultiPaxos {
         default: utils::Error("unknown message type");
       }
     }
+    utils::LogPrintf("[%u] server shutdown\n", node_id);
+    shutdown_finish.Post();
   }
  protected:
   // the current state of server
@@ -151,6 +168,10 @@ class MultiPaxos {
     }
   };
   //--- gobal structure ---
+  // signal to shutdown server
+  bool shutdown;
+  // shutdown finish signal
+  utils::Semaphore shutdown_finish;
   /*! \brief post office that handles message passing*/
   IPostOffice *post;
   // temporal out message

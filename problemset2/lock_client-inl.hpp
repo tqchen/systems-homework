@@ -9,10 +9,10 @@
 namespace consencus {
 class LockClient {
  public:
-  LockClient(IPostOffice *post, unsigned num_server, unsigned node_client) 
-      : post(post), num_server(num_server), node_client(node_client) {
+  LockClient(IPostOffice *post, unsigned num_server) 
+      : post(post), num_server(num_server) {
     req.type = LockMessage::kNull;
-    req.node_client = node_client;
+    req.node_client = post->GetRank();
     req.counter = 0;
   }
   // lock a certain lock index
@@ -87,7 +87,7 @@ class LockClient {
         // timeout, retransmit request
         this->SendMessage(req);
       }
-      // 
+      // sender 
       unsigned sender;
       LockMessage::Type type;
       LockMessage lock_msg;
@@ -104,7 +104,7 @@ class LockClient {
   // for simplicity send to all known lock server
   inline void SendMessage(LockMessage msg) {
     out_msg.Clear();
-    out_msg.WriteT(node_client);
+    out_msg.WriteT(msg.node_client);
     out_msg.WriteT(LockServer::kClientRequest);
     out_msg.WriteT(msg);
     for (unsigned i = 0; i < num_server; ++i) {

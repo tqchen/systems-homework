@@ -5,10 +5,10 @@ export LDFLAGS= -pthread -lm
 export CFLAGS = -Wall -O3  -pedantic 
 
 # specify tensor path
-BIN = paxos
+BIN = paxos_sim
 OBJ = 
 
-paxos: paxos.cpp utils/*.h *.hpp *.h 
+paxos_sim: paxos_sim.cpp utils/*.h *.hpp *.h 
 
 .PHONY: clean all
 
