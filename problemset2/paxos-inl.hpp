@@ -203,21 +203,6 @@ class MultiPaxos {
       case kSlave: return; // do nothing
     }   
   }
-  // send message that current instance is chosen
-  inline void SendChosenNotify(unsigned inst_index) {
-    AcceptRecord r;
-    r.pid = leader; r.inst_index = inst_index;
-    r.value = server_rec[inst_index].value;
-    out_msg.Clear();
-    out_msg.WriteT(node_id);
-    out_msg.WriteT(kChosenNotify);
-    out_msg.WriteT(r);
-    for (int i = 0; i < num_server; ++i) {
-      if (i != node_id) {
-        post->SendTo(i, out_msg);
-      }
-    }
-  }
  private:
   // the record to be returned to the proposer
   struct AcceptRecord {
@@ -299,6 +284,21 @@ class MultiPaxos {
       // in future, send no-op when there is lag
       this->SendAcceptReq();
       return;
+    }
+  }
+  // send message that current instance is chosen
+  inline void SendChosenNotify(unsigned inst_index) {
+    AcceptRecord r;
+    r.pid = leader; r.inst_index = inst_index;
+    r.value = server_rec[inst_index].value;
+    out_msg.Clear();
+    out_msg.WriteT(node_id);
+    out_msg.WriteT(kChosenNotify);
+    out_msg.WriteT(r);
+    for (int i = 0; i < num_server; ++i) {
+      if (i != node_id) {
+        post->SendTo(i, out_msg);
+      }
     }
   }
   // send ack to each node to tell them leader is still alive
@@ -446,6 +446,7 @@ class MultiPaxos {
         // mark current instance as chosen!!
         server_rec[current_instance].type = ProposeState::kChosen;
         this->HandleChosenEvent(current_instance);
+        this->SendChosenNotify(current_instance);
         this->ChangeServerState(kLeaderAccept);
       }
     } else {
