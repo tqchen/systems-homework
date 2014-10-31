@@ -97,8 +97,9 @@ class ServerThread {
 };
 
 int main(int argc, char *argv[]) {
-  if (argc < 3) { 
-    printf("Usage: num_server num_nodes\n");
+  if (argc < 1) { 
+    printf("Usage: stdin/script\n");
+    printf("First two lines of input must be num_server=number\n num_nodes=number\n");
     printf("0 to num_server - 1 will be lock server, num_server to num_nodes - 1 will be client\n");
     printf("the input from stdin can contain a sequence of command\n");
     printf("possible commands are in format param=value, no space in param and value since it is not a good parser:)\n");
@@ -107,11 +108,17 @@ int main(int argc, char *argv[]) {
     printf("\t  exec[client-id]=lock[lock-id]\n");
     printf("\t  exec[client-id]=unlock[lock-id]\n");
     return 0;
-  }        
-  int nserver = atoi(argv[1]);
-  int nnodes = atoi(argv[2]);
+  }
+  int nserver, nnodes;
+  FILE *fi = stdin;
+  if (strcmp(argv[1], "stdin")) {
+    fi = fopen(argv[1], "r");
+    utils::Check(fi != NULL, "fail to open \"%s\"", argv[1]);
+  }
+  utils::Check(fscanf(fi, "num_server=%d\n", &nserver) == 1, "first line must be num_server=number");
+  utils::Check(fscanf(fi, "num_node=%d", &nnodes) == 1, "second line must be num_node=number");
   utils::Check(nserver < nnodes, "num_server must be smaller than num_nodes");
-
+  
   PostOfficePipe post(nnodes);
   {
     std::vector<ClientThread*> clients;
@@ -122,10 +129,10 @@ int main(int argc, char *argv[]) {
     for (int i = nserver; i < nnodes; ++i) {
       clients.push_back(new ClientThread(post.GetPoster(i), nserver, i));
     }
-    printf("Finish creating all nodes, start working\n");
+    printf("Start working with %d servers %d nodes\n", nserver, nnodes);
     char *scmd;
     size_t n = 0;
-    while (getline(&scmd, &n, stdin) != -1) {
+    while (getline(&scmd, &n, fi) != -1) {
       // remove \n
       scmd[strlen(scmd) - 1] = '\0';
       n = 0;  
@@ -171,7 +178,7 @@ int main(int argc, char *argv[]) {
       }      
       sleep(1);
     }
-
+    if (fi != stdin) fclose(fi);
     for (size_t i = 0; i < clients.size(); ++i) {      
       delete clients[i];
     }
