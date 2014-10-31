@@ -1,5 +1,8 @@
 #ifndef LOCK_CLIENT_INL_HPP_
 #define LOCK_CLIENT_INL_HPP_
+/*! 
+ * \brief lock client library
+ */
 
 #include "./utils/utils.h"
 #include "./utils/message.h"

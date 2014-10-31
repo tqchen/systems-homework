@@ -80,9 +80,9 @@ class PostOfficePipe {
     utils::Assert(read(nodes[nid].pipefd[0], msg->data, msg->message_size) != 0, "postoffice, cannot read");
     return true;
   }
-  virtual void Send(unsigned from, unsigned to, const utils::Message &msg) {
+  virtual void Send(int from, int to, const utils::Message &msg) {
     float drop_rate = 0.0f;
-    if (from != to) { 
+    if (from != to && from != -1) { 
       drop_rate = std::max(nodes[from].drop_rate, nodes[to].drop_rate);
     }
     // drop the message, simulate network failure
@@ -103,7 +103,7 @@ class PostOfficePipe {
   // set drop rate of certain node
   virtual void SetDropRate(unsigned nid, float p) {
     nodes[nid].drop_rate = p;
-    utils::LogPrintf("[%u] droprate set to %g\n", nid, p);
+    utils::LogPrintf("[%u] !!! DropRate set to %g\n", nid, p);
   }
  private:
   /*!\brief entry point of loader thread */

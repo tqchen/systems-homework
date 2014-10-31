@@ -75,6 +75,7 @@ class MultiPaxos {
       case kAcceptReturn: return "kAcceptReturn";
       case kChosenNotify: return "kChosenNotify";
       case kClientRequest: return "kClientRequest";
+      case kBecomeLeader: return "kBecomeLeader";
     }
     return "";
   }    
@@ -84,36 +85,39 @@ class MultiPaxos {
     utils::Check(num_server <=  post->WorldSize(),
                  "number of server exceed limit");
     timeout_counter = 0;
-    timeout_limit = 40;
+    timeout_limit = 100;
     majority_size = num_server / 2 + 1;
     leader.node_id = 0; 
     leader.counter = 0;
     current_instance = 0;
     this->shutdown = true;
+    this->startserver = false;
+    shutdown_finish.Init(0);
   }
   virtual ~MultiPaxos(void) {
     this->Shutdown();
+    if (startserver) shutdown_finish.Wait();
+    shutdown_finish.Destroy();
   }
   inline void Shutdown(void){
     if (shutdown) return;
-    shutdown_finish.Init(0);
     this->shutdown = true;
     out_msg.Clear();
     out_msg.WriteT(node_id);
     out_msg.WriteT(kTerminate);
     post->SendTo(node_id, out_msg);
-    shutdown_finish.Wait();
-    shutdown_finish.Destroy();
   }
   // running a paxos server, doing MultiPaxos
   inline void RunServer(void) {
+    this->startserver = true;
     this->shutdown = false;
     // every start wantin to be a leader 
     this->ChangeServerState(kLeaderPrepare);
     utils::Message msg;
-    while (!shutdown) {
+    while (!this->shutdown) {
       bool ret = post->RecvFrom(&msg);
-      if (shutdown) break;
+      
+      if (this->shutdown) break;
       if (!ret) {
         this->HandleTimeOut(); continue;
       }
@@ -153,7 +157,11 @@ class MultiPaxos {
         case kAcceptReturn: this->HandleAcceptReturn(msg, sender); break; 
         case kChosenNotify: this->HandleChosenNotify(msg, sender); break;
         case kBecomeLeader: {
-          if (server_state == kSlave) this->ChangeServerState(kLeaderPrepare); 
+          unsigned inc;
+          utils::Check(msg.Read(&inc, sizeof(inc))!=0, "finish read inc");
+          leader.counter += inc;
+          utils::LogPrintf("[%d] raise counter by %u\n", node_id, inc);
+          this->ChangeServerState(kLeaderPrepare);
           break;
         }
         case kTimeout: utils::Error("unexpected message timeout");
@@ -198,7 +206,7 @@ class MultiPaxos {
   };
   //--- gobal structure ---
   // signal to shutdown server
-  bool shutdown;
+  bool shutdown, startserver;
   // shutdown finish signal
   utils::Semaphore shutdown_finish;
   /*! \brief post office that handles message passing*/
@@ -298,6 +306,17 @@ class MultiPaxos {
       while (current_instance < server_rec.size() &&
              server_rec[current_instance].type == ProposeState::kChosen) {
         current_instance += 1;
+      }
+      if (server_state == kLeaderPrepare) { 
+        // set rest server rec that are not chosen to be unknown
+        // this is important, since server_rec records the 
+        // largest (pid, value) of accepted response if the state is not Chosen
+        // previous trace need to be cleanedup, so the accept response max only contains current run
+        for (unsigned i = current_instance; i < server_rec.size(); ++i) {
+          if (server_rec[i].type != ProposeState::kChosen) {
+            server_rec[i].type = ProposeState::kNull;
+          }
+        }
       }
     }
     if (server_state == kSlave) {
@@ -583,9 +602,6 @@ class MultiPaxos {
       // accept the instance if proposal id matchs promise
       if (accepted_rec.size() <= inst_index) { 
         accepted_rec.resize(inst_index + 1);
-      }
-      if (!accepted_rec[inst_index].is_null()) {
-        utils::Assert(accepted_rec[inst_index].value == value, "can only accept same proposal");
       }
       accepted_rec[inst_index].type = ProposeState::kAccepted;
       accepted_rec[inst_index].pid = pid;

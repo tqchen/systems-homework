@@ -17,6 +17,9 @@ class ClientThread {
     worker_thread.Start(ThreadEntry, this);
   }
   ~ClientThread(void) {
+    while(queue.size() != 0) {
+      sleep(10);
+    }
     destroy_signal = true;
     task_counter.Post();
     worker_thread.Join();
@@ -26,7 +29,7 @@ class ClientThread {
   }
   inline void RunCmd(int lock, unsigned lock_index) {
     queue_lock.Lock();
-    queue.push(std::make_pair(lock, lock_index));
+    queue.push(std::make_pair(lock, lock_index));    
     queue_lock.Unlock();
     task_counter.Post();
   }  
@@ -46,13 +49,13 @@ class ClientThread {
       std::pair<int, unsigned> cmd = queue.front(); queue.pop();
       queue_lock.Unlock();
       if (cmd.first == 0) {
-        utils::LogPrintf("[%d] start exec lock(%d)\n", nodeid, cmd.second);
+        utils::LogPrintf("[%d] !!!start exec lock(%d)\n", nodeid, cmd.second);
         locker.Lock(cmd.second);
-        utils::LogPrintf("[%d] finish exec lock(%d)\n", nodeid, cmd.second);
+        utils::LogPrintf("[%d] !!!finish exec lock(%d)\n", nodeid, cmd.second);
       } else {
-        utils::LogPrintf("[%d] start exec unlock(%d)\n", nodeid, cmd.second);
+        utils::LogPrintf("[%d] !!!start exec unlock(%d)\n", nodeid, cmd.second);
         locker.UnLock(cmd.second);
-        utils::LogPrintf("[%d] finish exec unlock(%d)\n", nodeid, cmd.second);
+        utils::LogPrintf("[%d] !!!finish exec unlock(%d)\n", nodeid, cmd.second);
       }
     }
   }  
@@ -98,13 +101,11 @@ int main(int argc, char *argv[]) {
     printf("Usage: num_server num_nodes\n");
     printf("0 to num_server - 1 will be lock server, num_server to num_nodes - 1 will be client\n");
     printf("the input from stdin can contain a sequence of command\n");
-    printf("possible commands are in format param=value\n");
+    printf("possible commands are in format param=value, no space in param and value since it is not a good parser:)\n");
     printf("Commands:\n");
-    printf("\t  drop[node-id]=droprate: set drop rate\n");
-    printf("\t  kill=node-id: kill certain node\n");
+    printf("\t  drop[node-id]=droprate: set drop rate of node, set droprate=1 means we isolate the node from rest of the group\n");
     printf("\t  exec[client-id]=lock[lock-id]\n");
     printf("\t  exec[client-id]=unlock[lock-id]\n");
-    printf("\t  exit: exit from the enviroment\n");
     return 0;
   }        
   int nserver = atoi(argv[1]);
@@ -142,17 +143,27 @@ int main(int argc, char *argv[]) {
         }
       }
       if (!strncmp(name, "drop[", 5)) {
-        int nid;
-        if (sscanf(name, "drop[%d]", &nid) != 1) continue;
-        post.SetDropRate(nid, atof(val));
+        int nid, nid2;
+        if (sscanf(name, "drop[%d-%d]", &nid, &nid2) == 2) {
+          for (int i = nid; i <= nid2; ++i) {
+            post.SetDropRate(i, atof(val));
+          }
+          continue;
+        }
+        if (sscanf(name, "drop[%d]", &nid) == 1) {
+          post.SetDropRate(nid, atof(val));
+          continue;
+        }
       }
-      if (!strcmp(name, "raise")) {
+      if (!strncmp(name, "raise[",6)) {
         int nid = atoi(val);
+        if (sscanf(name, "raise[%d]", &nid) != 1) continue;
         utils::Message msg;
-        unsigned from = 0;
+        unsigned from = 0, inc = atoi(val);
         msg.WriteT(from);
         msg.WriteT(LockServer::kBecomeLeader);
-        post.Send(0, nid, msg);
+        msg.WriteT(inc);
+        post.Send(-1, nid, msg);
         continue;
       }
       if (!strcmp(name, "sleep")) {
@@ -160,8 +171,8 @@ int main(int argc, char *argv[]) {
       }      
       sleep(1);
     }
-    sleep(1);
-    for (size_t i = 0; i < clients.size(); ++i) {
+
+    for (size_t i = 0; i < clients.size(); ++i) {      
       delete clients[i];
     }
     for (size_t i = 0; i < servers.size(); ++i) {
