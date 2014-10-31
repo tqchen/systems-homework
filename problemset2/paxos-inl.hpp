@@ -57,13 +57,28 @@ class MultiPaxos {
     // client request, trap into client request handler
     kClientRequest = 8
   };
+  // get message type name
+  inline static const char *GetName(MessageType t) {
+    switch (t) {
+      case kTerminate: return "kTerminate";
+      case kLeaderAck: return "kLeaderAck";
+      case kTimeout: return "kTimeout";
+      case kPrepareRequest: return "kPrepareRequest";
+      case kPrepareReturn: return "kPrepareReturn";
+      case kAcceptRequest: return "kAcceptRequest";
+      case kAcceptReturn: return "kAcceptReturn";
+      case kChosenNotify: return "kChosenNotify";
+      case kClientRequest: return "kClientRequest";
+    }
+    return "";
+  }    
   MultiPaxos(IPostOffice *post, int num_server) : post(post) {
     this->node_id = post->GetRank();
     this->num_server = num_server;
     utils::Check(num_server <=  post->WorldSize(),
                  "number of server exceed limit");
     timeout_counter = 0;
-    timeout_limit = 20;
+    timeout_limit = 40;
     majority_size = num_server / 2 + 1;
     leader.node_id = 0; 
     leader.counter = 0;
@@ -102,6 +117,7 @@ class MultiPaxos {
       // first two are always sender and type
       utils::Check(msg.Read(&sender, sizeof(sender)) != 0, "invalid message");
       utils::Check(msg.Read(&type, sizeof(type)) != 0, "invalid message");
+      utils::LogPrintf("[%u] recv %s from %u\n", node_id, GetName(type), sender);
       if (type == kTimeout) {
         this->HandleTimeOut(); continue;
       }
@@ -125,9 +141,10 @@ class MultiPaxos {
         }
         case kClientRequest: this->HandleClientRequest(msg, sender); break;
         case kPrepareReturn: this->HandlePrepareReturn(msg, sender); break; 
+        case kLeaderAck: this->HandleLeaderAck(msg, sender); break;
         case kAcceptReturn: this->HandleAcceptReturn(msg, sender); break; 
         case kChosenNotify: this->HandleChosenNotify(msg, sender); break;
-        default: utils::Error("unknown message type");
+        case kTimeout: utils::Error("unexpected message timeout");
       }
     }
     utils::LogPrintf("[%u] server shutdown\n", node_id);
@@ -212,16 +229,18 @@ class MultiPaxos {
     if (timeout_counter > timeout_limit) {
       // this is abnormal timeout, maybe some server is down
       // try to switch to new leader state
-      this->ChangeServerState(kLeaderPrepare);
+      if (server_state != kLeaderPrepare) {
+        this->ChangeServerState(kLeaderPrepare);
+      }
       return;
-    }
+    }    
     // normal timeout, try to re-transmit unfinished request
     switch (server_state) {
       case kLeaderPrepare: this->SendPrepareReq(); return;
       case kLeaderAccept: this->SendAcceptReq(); return;
-      case kLeaderIdle:
-      case kTerminated: utils::Error("invalid server state");
+      case kLeaderIdle: return;
       case kSlave: return; // do nothing
+      case kTerminated: utils::Error("invalid server state");
     }   
   }
  private:
@@ -260,15 +279,23 @@ class MultiPaxos {
   //---- Server Logic------
   // change server state to state
   inline void ChangeServerState(ServerState state) {
-    server_state = state;
+    server_state = state;    
     timeout_counter = 0;
     if (server_state == kLeaderPrepare || server_state == kLeaderAccept) {
       // advance current instance to latest not decided value
       while (current_instance < server_rec.size() &&
              server_rec[current_instance].type == ProposeState::kChosen) {
         current_instance += 1;
-      }      
-    }    
+      }
+    }
+    switch (server_state) {
+      case kLeaderPrepare: utils::LogPrintf("[%d] LeaderPrepare\n", node_id); break;
+      case kLeaderAccept: utils::LogPrintf("[%d] LeaderAccept\n", node_id); break;
+
+      case kLeaderIdle: utils::LogPrintf("[%d] LeaderIdle\n", node_id); break; 
+      case kSlave: utils::LogPrintf("[%d] Slave\n", node_id); break;
+      default:;
+    }
     // change to leader state, need to prepare the necessary data structures
     if (server_state == kLeaderPrepare) {
       promise_counter = 0;
@@ -293,7 +320,7 @@ class MultiPaxos {
           server_rec.push_back(s);
         } else {
           // switch to idle state, no new value so far
-          server_state = kLeaderIdle;
+          server_state = kLeaderIdle; return;
         }
       }
       accept_counter = 0;
@@ -497,6 +524,7 @@ class MultiPaxos {
     if (promise.is_null() || promise.pid <= pid) {
       promise.pid = pid;
       promise.type = ProposeState::kAccepted;
+      printf("[%u] promise (%u, %u)\n", node_id, pid.node_id, pid.counter);
       // attach the promise id to the data anyway
       out.WriteT(promise.pid);
       // return the accepted instance which are 

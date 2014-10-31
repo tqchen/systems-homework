@@ -22,6 +22,7 @@ class ClientThread {
     worker_thread.Join();
     queue_lock.Destroy();
     task_counter.Destroy();
+    printf("[%d] client thread shutdown\n", nodeid);
   }
   inline void RunCmd(int lock, unsigned lock_index) {
     queue_lock.Lock();
@@ -45,11 +46,11 @@ class ClientThread {
       std::pair<int, unsigned> cmd = queue.front(); queue.pop();
       queue_lock.Unlock();
       if (cmd.first == 0) {
-        utils::LogPrintf("[%d] start exec lock[%d]\n", nodeid, cmd.second);
+        utils::LogPrintf("[%d] start exec lock(%d)\n", nodeid, cmd.second);
         locker.Lock(cmd.second);
-        utils::LogPrintf("[%d] finish exec lock[%d]\n", nodeid, cmd.second);
+        utils::LogPrintf("[%d] finish exec lock(%d)\n", nodeid, cmd.second);
       } else {
-        utils::LogPrintf("[%d] start exec unlock[%d]\n", nodeid, cmd.second);
+        utils::LogPrintf("[%d] start exec unlock(%d)\n", nodeid, cmd.second);
         locker.Lock(cmd.second);
         utils::LogPrintf("[%d] finish exec unlock[%d]\n", nodeid, cmd.second);
       }
@@ -142,13 +143,13 @@ int main(int argc, char *argv[]) {
         }
       }
     }
-    
+    sleep(100);
+    for (size_t i = 0; i < clients.size(); ++i) {
+      delete clients[i];
+    }
     printf("invalid command or end of file encountered finish working\n");
     for (size_t i = 0; i < servers.size(); ++i) {
       delete servers[i];
-    }
-    for (size_t i = 0; i < clients.size(); ++i) {
-      delete clients[i];
     }
   }
   return 0;
