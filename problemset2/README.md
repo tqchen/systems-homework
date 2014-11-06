@@ -4,6 +4,10 @@ Team
 Tianqi Chen, 1323348, tqchen@cs.washington.edu
 Tianyi Zhou, 1323375, tianzh@cs.washington.edu
 
+Summary
+===
+This is an implementation of distributed lock server using leader based paxos. The code is implemented in an event-driven way that assumes messages can be lost, duplicated or outdated. Our final system contains a simulator that can simulate different network problems, and a UDP server/client implementation.
+
 Simulator
 ===
 Simulator is a tool that executes the commands and simulates the drop of message sending
