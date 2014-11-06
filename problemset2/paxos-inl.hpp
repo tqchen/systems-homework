@@ -417,7 +417,7 @@ class MultiPaxos {
     out_msg.WriteT(server_rec[current_instance].value);
     out_msg.WriteT(current_instance);
     for (int i = 0; i < num_server; ++i) {
-      if (!promise_replied[i]) continue;
+      // we can are safe to send the value to any accepters
       if (accept_replied[i]) continue;
       post->SendTo(i, out_msg);
     }
@@ -598,11 +598,12 @@ class MultiPaxos {
     // send the message back
     out.WriteT(kAcceptReturn);
     // there is the handler
-    if (promise.pid == pid) {
+    if (promise.pid <= pid) {
       // accept the instance if proposal id matchs promise
       if (accepted_rec.size() <= inst_index) { 
         accepted_rec.resize(inst_index + 1);
       }
+      promise.pid = pid;
       accepted_rec[inst_index].type = ProposeState::kAccepted;
       accepted_rec[inst_index].pid = pid;
       accepted_rec[inst_index].value = value;

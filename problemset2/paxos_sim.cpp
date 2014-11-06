@@ -97,7 +97,7 @@ class ServerThread {
 };
 
 int main(int argc, char *argv[]) {
-  if (argc < 1) { 
+  if (argc < 2) { 
     printf("Usage: stdin/script\n");
     printf("First two lines of input must be num_server=number\n num_nodes=number\n");
     printf("0 to num_server - 1 will be lock server, num_server to num_nodes - 1 will be client\n");
