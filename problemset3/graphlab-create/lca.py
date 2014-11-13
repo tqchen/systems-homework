@@ -1,6 +1,7 @@
 import graphlab as gl
 import time
 gl.set_runtime_config('GRAPHLAB_CACHE_FILE_LOCATIONS', '/mnt/data/tmp')
+gl.set_runtime_config('GRAPHLAB_DEFAULT_NUM_GRAPH_LAMBDA_WORKERS', 30)
 
 dpath = '/mnt/data/'
 
@@ -16,7 +17,7 @@ def load_data(dpath, maxn=None):
 def findp_update_fn(src, edge, dst):
     pdst = dst['parent']
     psrc = src['parent']
-    for pid, d in pdst.items():
+    for pid, d in pdst.iteritems():
         if pid not in psrc:
             psrc[pid] = d + 1
             src['changed'] = True
@@ -41,5 +42,5 @@ def find_parents(g):
     print 'Triple apply findp finished in: %f secs' % (time.time() - start)
     return g
     
-sg = load_data(dpath)
+sg = load_data(dpath, 1000000)
 sg = find_parents(sg)
