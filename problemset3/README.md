@@ -14,6 +14,7 @@ Usage
 * spark-submit lcascipy.py path-to-data-folder N [out-hdfs-path]
   - If out-hdfs-path is not specified, the result will be stored into data-folder/result-N.csv
   - For large task, it is recommended to store result in hdfs
+* The first time running, a npygraph.pkl file will be created in the data folder, latter runs will directly load from pickle file and will be much faster
 * Example usage assume data are in folder data
   - ``spark-submit lcascipy.py data 1000`` will put result in data/result-1000.csv
   - ``spark-submit lcascipy.py data 1000 result-1000`` will put result in HDFS result-1000/part-*
