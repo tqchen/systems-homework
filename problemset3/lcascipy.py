@@ -64,31 +64,35 @@ def load_graph(dpath):
     return g
 
 def map_dist(dist, k):
-    return [(t, (k, d)) for t,d in dist.iteritems()]
+    for t,d in dist.iteritems():
+        yield (t, (k, d)) 
 
 def map_pairs(lst, year, rootid):
     lst = [x for x in lst]
-    ret = []    
-    lst = sorted(lst, key = lambda x:x[0])
-    for i in range(len(lst)):
-        for j in range(i+1,len(lst)):
-            maxd = max(lst[i][1], lst[j][1])
-            ret.append(((lst[i][0],lst[j][0]), (rootid, maxd, year)))
-    return ret
+    for a in lst:
+        for b in lst:
+            if a[0] < b[0]:
+                maxd = max(a[1], b[1])
+                yield ((a[0], b[0]), (rootid, maxd, year))
 
 def cmp_key(x):
     rid, d, y = x
     return (d, -y, rid)
     
 if len(sys.argv) < 3:
-    print 'Usage:<path> <sn> [out-textfile-path]'
+    print 'Usage:<path> <sn> [out-textfile-path] [local]'
     exit(-1)
 
+if len(sys.argv) > 3 and sys.argv[3] == 'local':
+    spark = SparkContext('local', appName = 'SparkLCA')
+else:
+    spark = SparkContext(appName = 'SparkLCA')
+
 tstart = time.time()
-spark = SparkContext("local", "SparkLCA")
 N = int(sys.argv[2])
 g = load_graph(sys.argv[1])
-if len(sys.argv) > 3:
+
+if len(sys.argv) > 3 and sys.argv[3] != 'local':
     out_hdfs = sys.argv[3]
 else:
     out_hdfs = None
@@ -113,7 +117,7 @@ if out_hdfs is None:
         writer.writerow(['p1', 'p2', 'a', 'depth', 'year'])
         writer.writerows(sorted(lca))
         print ("Wrote %d results to results.csv %f sec elapsed" % (len(lca), time.time()-tstart))
-else:
+else:    
     lca.saveAsTextFile(out_hdfs)    
     print 'wrote results to %s, %f secs elapsed' % (out_hdfs, time.time()-tstart)
 #print "Wrote {r} results to results.csv".format(r=len(lca))
