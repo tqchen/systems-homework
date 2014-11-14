@@ -10,7 +10,7 @@ import os.path
 class Graph:
     def __init__(self, dtuple=None, dpath = None):
         if dtuple != None:
-            self.year, self.indptr, self.indices, self.nodesid = dtuple
+            self.year, self.indptr, self.indices, self.nodesid, self.in_edges = dtuple
             return        
         assert dpath != None
         pdata = np.loadtxt(dpath+'/papers.csv', delimiter=',', skiprows=1, dtype=int)    
@@ -22,12 +22,16 @@ class Graph:
             and year[x[1]]>=0 and year[x[0]] >= year[x[1]] and x[0] != x[1]
         cdata = cdata[np.apply_along_axis(cfilter, 1, cdata)]
         csr = sp.csr_matrix((np.zeros(cdata[:,0].size), (cdata[:,0], cdata[:,1]))) 
+        in_edges = np.zeros(len(year), dtype='int32')
+        for i in xrange(cdata.shape[0]):
+            in_edges[cdata[i,1]] += 1        
         self.year = year.astype('int32')
         self.indptr = csr.indptr.astype('int32')
         self.indices = csr.indices.astype('int32')
         self.nodesid = pdata[:,0].astype('int32')
+        self.in_edges = in_edges
     def get_tuple(self):
-        return (self.year, self.indptr, self.indices, self.nodesid)
+        return (self.year, self.indptr, self.indices, self.nodesid, self.in_edges)
     def get_link(self,i):
         return self.indices[self.indptr[i]:self.indptr[i+1]]
     def nodes(self):
@@ -46,9 +50,13 @@ class Graph:
             qexpand = vnext
         return dist
         
-def shortest_path(gtuple, start):
+def shortest_path(gtuple, k):
     g = Graph(dtuple = gtuple)
-    return g.shortest_path(start)
+    dist = g.shortest_path(k)
+    for t, d in dist.iteritems():
+        # for node with in_edge == 1, cannot be LCA
+        if g.in_edges[t] > 1 or t == k:
+            yield (t, (k, d))
 
 def get_year(gtuple, rid):
     g = Graph(dtuple = gtuple)
@@ -64,10 +72,6 @@ def load_graph(dpath):
         pickle.dump(g, fo, 2)
         fo.close()
     return g
-
-def map_dist(dist, k):
-    for t,d in dist.iteritems():
-        yield (t, (k, d)) 
 
 def map_pairs(lst, year, rootid):
     lst = [x for x in lst]
@@ -104,7 +108,7 @@ seeds = spark.parallelize([p for p in g.nodes() if p <= N])
 gtuple = spark.broadcast(g.get_tuple())
 print 'finish broadcasting, %f secs elapsed' % (time.time()-tstart)
 
-cite_depth = seeds.flatMap(lambda k: map_dist(shortest_path(gtuple.value, k), k))
+cite_depth = seeds.flatMap(lambda k: shortest_path(gtuple.value, k))
 dist_root = cite_depth.groupByKey()
 pairs_rdd = dist_root.flatMap(lambda x: map_pairs(x[1], get_year(gtuple.value, x[0]), x[0]))
 lca_rdd = pairs_rdd.reduceByKey(lambda x, y: x if cmp_key(x) < cmp_key(y) else y)

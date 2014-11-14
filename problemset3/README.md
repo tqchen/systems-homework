@@ -17,6 +17,3 @@ Usage
 * Example usage assume data are in folder data
   - ``spark-submit lcascipy.py data 1000`` will put result in data/result-1000.csv
   - ``spark-submit lcascipy.py data 1000 result-1000`` will put result in HDFS result-1000/part-*
-
-
-
