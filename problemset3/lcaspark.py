@@ -3,6 +3,7 @@ import networkx as nx
 import networkx
 import csv
 import sys
+import time
 
 def load_csv(filename):
     """Helper function to load CSV data from a GZipped file"""
@@ -44,28 +45,28 @@ def cmp_key(x):
     rid, d, y = x
     return (d, -y, rid)
     
-if len(sys.argv) < 2:
-    print 'Usage:<path>'
+if len(sys.argv) < 3:
+    print 'Usage:<path> <sn>'
     exit(-1)
 
 spark = SparkContext("local", "SparkLCA")
 g = load_graph(sys.argv[1])
-N = 50
+N = int(sys.argv[2])
 
 print 'finish loading graph data'
 seeds = spark.parallelize([p for p in g.nodes() if p <= N])
 distg = spark.broadcast(g)
 print 'start working'
+tstart = time.time()
 cite_depth = seeds.flatMap(lambda k: map_dist(nx.single_source_shortest_path_length(distg.value, k), k))
 dist_root = cite_depth.groupByKey()
 pairs_rdd = dist_root.flatMap(lambda x: map_pairs(x[1], distg.value.node[x[0]]['year'], x[0]))
 lca_rdd = pairs_rdd.reduceByKey(lambda x, y: x if cmp_key(x) < cmp_key(y) else y)
-
 lca = lca_rdd.map(lambda x: x[0] + x[1]).collect()
-with open('results.csv', 'wb') as resultsfile:
+
+with open(sys.argv[1]+'/result-%d.csv' % N, 'wb') as resultsfile:
     writer = csv.writer(resultsfile)
     writer.writerow(['p1', 'p2', 'a', 'depth', 'year'])
     writer.writerows(sorted(lca))
-    for p1, p2, a, 
-print ("Wrote %d results to results.csv" % (len(lca)))
+print ("Wrote %d results to results.csv %f sec elapsed" % (len(lca), time.time()-tstart))
 #print "Wrote {r} results to results.csv".format(r=len(lca))
