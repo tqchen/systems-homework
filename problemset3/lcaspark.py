@@ -29,7 +29,7 @@ def map_dist(dist, k):
     return [(k,t,d) for t,d in dist.iteritems()]
 
 spark = SparkContext("local", "SparkLCA")
-g = load_graph('data')
+g = load_graph('toy')
 N = 50
 
 print 'finish loading graph data'
@@ -38,3 +38,4 @@ distg = spark.broadcast(g)
 print 'start working'
 cite_depth = seeds.flatMap(lambda k: map_dist(nx.single_source_shorest_path(distg.value, k)))
 print 'finish'
+
