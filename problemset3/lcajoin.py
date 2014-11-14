@@ -73,14 +73,13 @@ def load_graph(dpath):
         fo.close()
     return g
 
-def map_pairs(lst, year, rootid):
-    lst = [x for x in lst]
-    for a in lst:
-        for b in lst:
-            if a[0] < b[0]:
-                maxd = max(a[1], b[1])
-                yield ((a[0], b[0]), (rootid, maxd, year))
-
+def map_join_pair(x, year):
+    rootid = x[0]
+    a, b = x[1]
+    if a[0] < b[0]:
+        maxd = max(a[1], b[1])        
+        yield ((a[0],b[0]), (rootid, maxd, year))
+    
 def cmp_key(x):
     rid, d, y = x
     return (d, -y, rid)
@@ -109,8 +108,8 @@ gtuple = spark.broadcast(g.get_tuple())
 print 'finish broadcasting, %f secs elapsed' % (time.time()-tstart)
 
 cite_depth = seeds.flatMap(lambda k: shortest_path(gtuple.value, k))
-dist_root = cite_depth.groupByKey()
-pairs_rdd = dist_root.flatMap(lambda x: map_pairs(x[1], get_year(gtuple.value, x[0]), x[0]))
+pairs_rdd = cite_depth.join(cite_depth).flatMap(lambda x: map_join_pair(x, get_year(gtuple.value, x[0])))
+                
 lca_rdd = pairs_rdd.reduceByKey(lambda x, y: x if cmp_key(x) < cmp_key(y) else y)
 lca = lca_rdd.map(lambda x: x[0] + x[1])
 
