@@ -27,8 +27,22 @@ def load_graph(dpath):
     return g
 
 def map_dist(dist, k):
-    return [(k,t,d) for t,d in dist.iteritems()]
+    return [(t, (k, d)) for t,d in dist.iteritems()]
 
+def map_pairs(lst, year):
+    rootid = lst[0]
+    ret = []
+    lst = sorted(lst, key = lambda x:x[0])
+    for i in range(len(lst)):
+        for j in range(i,len(lst)):
+            maxd = max(lst[i], lst[j])
+            ret.append(((lst[i],lst[j]), (rootid, maxd, year)))
+    return ret
+
+def cmp_key(x):
+    rid, d, y = x
+    return (d, -y, rid)
+    
 if len(sys.argv) < 2:
     print 'Usage:<path>'
     exit(-1)
@@ -42,6 +56,15 @@ seeds = spark.parallelize([p for p in g.nodes() if p <= N])
 distg = spark.broadcast(g)
 print 'start working'
 cite_depth = seeds.flatMap(lambda k: map_dist(nx.single_source_shorest_path(distg.value, k)))
+dist_root = cite_depth.groupByKey()
+pairs_rdd = dist_root.flatMap(lambda lst: map_pairs(x[1], distg.value.node[x[0]]['year'] ))
+lca_rdd = pairs_rdd.reduceByKey(lambda x, y: x if cmp_key(x) < cmp_key(y) else y)
 
-print 'finish'
-
+lca = lca_rdd.map(lambda x: x[0] + x[1]).collect()
+print lca
+with open('results.csv', 'wb') as resultsfile:
+    writer = csv.writer(resultsfile)
+    writer.writerow(['p1', 'p2', 'a', 'depth', 'year'])
+    writer.writerows(sorted(lca))
+printt("Wrote %d results to results.csv" % (len(lca)))
+#print "Wrote {r} results to results.csv".format(r=len(lca))
