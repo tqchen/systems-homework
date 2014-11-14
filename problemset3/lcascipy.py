@@ -18,7 +18,9 @@ class Graph:
         year[:] = -1
         year[pdata[:,0]] = pdata[:,1]
         cdata = np.loadtxt(dpath+'/cites.csv', delimiter=',', skiprows=1, dtype=int) 
-        cdata = cdata[np.apply_along_axis(lambda x: x[0] < year.size and x[1] < year.size and year[x[0]]>=0 and year[x[1]]>=0 and year[x[0]] >= year[x[1]] and x[0] != x[1], 1, cdata)]    
+        cfilter = lambda x: x[0] < year.size and x[1] < year.size and year[x[0]]>=0\
+            and year[x[1]]>=0 and year[x[0]] >= year[x[1]] and x[0] != x[1]
+        cdata = cdata[np.apply_along_axis(cfilter, 1, cdata)]
         csr = sp.csr_matrix((np.zeros(cdata[:,0].size), (cdata[:,0], cdata[:,1]))) 
         self.year = year.astype('int32')
         self.indptr = csr.indptr.astype('int32')
@@ -80,7 +82,7 @@ def cmp_key(x):
     return (d, -y, rid)
     
 if len(sys.argv) < 3:
-    print 'Usage:<path> <sn> [out-textfile-path] [local]'
+    print 'Usage:<path> <sn> [out-textfile-path]'
     exit(-1)
 
 if len(sys.argv) > 3 and sys.argv[3] == 'local':
@@ -120,4 +122,3 @@ if out_hdfs is None:
 else:    
     lca.saveAsTextFile(out_hdfs)    
     print 'wrote results to %s, %f secs elapsed' % (out_hdfs, time.time()-tstart)
-#print "Wrote {r} results to results.csv".format(r=len(lca))
