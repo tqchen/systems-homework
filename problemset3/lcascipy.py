@@ -81,28 +81,39 @@ def cmp_key(x):
     return (d, -y, rid)
     
 if len(sys.argv) < 3:
-    print 'Usage:<path> <sn>'
+    print 'Usage:<path> <sn> [out-textfile-path]'
     exit(-1)
 
 tstart = time.time()
 spark = SparkContext("local", "SparkLCA")
 N = int(sys.argv[2])
 g = load_graph(sys.argv[1])
+if len(sys.argv) > 3:
+    out_hdfs = sys.argv[3]
+else:
+    out_hdfs = None
 
 print 'finish loading graph data %f secs elapsed' % (time.time()-tstart)
 seeds = spark.parallelize([p for p in g.nodes() if p <= N])
 gtuple = spark.broadcast(g.get_tuple())
-print 'finish broadcasting,x %f secs elapsed' % (time.time()-tstart)
+print 'finish broadcasting, %f secs elapsed' % (time.time()-tstart)
 
 cite_depth = seeds.flatMap(lambda k: map_dist(shortest_path(gtuple.value, k), k))
 dist_root = cite_depth.groupByKey()
 pairs_rdd = dist_root.flatMap(lambda x: map_pairs(x[1], get_year(gtuple.value, x[0]), x[0]))
 lca_rdd = pairs_rdd.reduceByKey(lambda x, y: x if cmp_key(x) < cmp_key(y) else y)
-lca = lca_rdd.map(lambda x: x[0] + x[1]).collect()
+lca = lca_rdd.map(lambda x: x[0] + x[1])
 
-with open(sys.argv[1]+'/result-%d.csv' % N, 'wb') as resultsfile:
-    writer = csv.writer(resultsfile)
-    writer.writerow(['p1', 'p2', 'a', 'depth', 'year'])
-    writer.writerows(sorted(lca))
-print ("Wrote %d results to results.csv %f sec elapsed" % (len(lca), time.time()-tstart))
+print 'finish calculation, %f secs elapsed' % (time.time()-tstart)
+
+if out_hdfs is None:
+    lca = lca.collect()
+    with open(sys.argv[1]+'/result-%d.csv' % N, 'wb') as resultsfile:
+        writer = csv.writer(resultsfile)
+        writer.writerow(['p1', 'p2', 'a', 'depth', 'year'])
+        writer.writerows(sorted(lca))
+        print ("Wrote %d results to results.csv %f sec elapsed" % (len(lca), time.time()-tstart))
+else:
+    lca.saveAsTextFile(out_hdfs)    
+    print 'wrote results to %s, %f secs elapsed' % (out_hdfs, time.time()-tstart)
 #print "Wrote {r} results to results.csv".format(r=len(lca))
