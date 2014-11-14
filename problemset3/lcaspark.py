@@ -1,6 +1,7 @@
 from pyspark import SparkContext
 import networkx as nx
 import csv
+import sys
 
 def load_csv(filename):
     """Helper function to load CSV data from a GZipped file"""
@@ -28,8 +29,12 @@ def load_graph(dpath):
 def map_dist(dist, k):
     return [(k,t,d) for t,d in dist.iteritems()]
 
+if len(sys.argv) < 2:
+    print 'Usage:<path>'
+    exit(-1)
+
 spark = SparkContext("local", "SparkLCA")
-g = load_graph('toy')
+g = load_graph(sys.argv[1])
 N = 50
 
 print 'finish loading graph data'
@@ -37,5 +42,6 @@ seeds = spark.parallelize([p for p in g.nodes() if p <= N])
 distg = spark.broadcast(g)
 print 'start working'
 cite_depth = seeds.flatMap(lambda k: map_dist(nx.single_source_shorest_path(distg.value, k)))
+
 print 'finish'
 
