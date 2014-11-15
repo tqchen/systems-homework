@@ -6,7 +6,10 @@ Tianyi Zhou, 1323375, tianzh@cs.washington.edu
 
 Summary
 ===
-This is an pyspark implementation of LCA problem
+This is an pyspark implementation of LCA problem, there are two implementations
+
+* lcagrid.py  distribute task in a matrix grid and calculate the LCA between pairs in each grid
+* lcascipy.py calculate shortest path distributed, then use two mapreduce step to get the result
 
 Usage
 ===
